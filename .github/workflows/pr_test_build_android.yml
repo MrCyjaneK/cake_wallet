@@ -277,13 +277,18 @@ jobs:
         with:
           name: build_number
           path: build_number.txt
-
+      - name: Find APK file
+        id: find_apk
+        run: |
+          apk_file=$(ls ${{ github.workspace }}/build/app/outputs/flutter-apk/test-apk/*_slack.apk || echo "")
+          echo "APK_FILE=$apk_file" >> $GITHUB_ENV
+        
       - name: Send Test APK
         continue-on-error: true
         uses: adrey/slack-file-upload-action@1.0.5
         with:
           token: ${{ secrets.SLACK_APP_TOKEN }}
-          path: ${{ github.workspace }}/build/app/outputs/flutter-apk/test-apk/*_slack.apk
+          path: ${{ env.APK_FILE }}
           channel: ${{ secrets.SLACK_APK_CHANNEL }}
           initial_comment: ${{ github.event.head_commit.message }}
 
