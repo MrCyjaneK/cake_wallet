@@ -21,7 +21,7 @@ jobs:
         STORE_PASS: test@cake_wallet
         KEY_PASS: test@cake_wallet
         MONEROC_CACHE_DIR_ROOT: /opt/generic_cache
-        BRANCH_NAME: main
+        BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
       volumes:
         - /opt/cw_cache_android/root/.cache:/root/.cache
         - /opt/cw_cache_android/root/.ccache:/root/.ccache
@@ -249,13 +249,14 @@ jobs:
         run: |
           cd build/app/outputs/flutter-apk
           mkdir test-apk
-          cp app-arm64-v8a-release.apk test-apk/$BRANCH_NAME.apk
+          cp app-arm64-v8a-release.apk test-apk/${BRANCH_NAME}.apk
           cp app-x86_64-release.apk test-apk/${BRANCH_NAME}_x86.apk
-
+          cd test-apk
+          cp test-apk/${BRANCH_NAME}.apk test-apk/${BRANCH_NAME}_slack.apk
       - name: Upload Artifact
         uses: kittaakos/upload-artifact-as-is@v0
         with:
-          path: /opt/android/cake_wallet/build/app/outputs/flutter-apk/test-apk/
+          path: ${{ github.workspace }}/cake_wallet/build/app/outputs/flutter-apk/test-apk/
 
       # Re-upload updated build number for the next run
       - name: Upload updated build number
@@ -269,9 +270,7 @@ jobs:
         uses: adrey/slack-file-upload-action@1.0.5
         with:
           token: ${{ secrets.SLACK_APP_TOKEN }}
-          path: /opt/android/cake_wallet/build/app/outputs/flutter-apk/test-apk/$BRANCH_NAME.apk
+          path: ${{ github.workspace }}/cake_wallet/build/app/outputs/flutter-apk/test-apk/*_slack.apk
           channel: ${{ secrets.SLACK_APK_CHANNEL }}
-          title: "$BRANCH_NAME.apk"
-          filename: $BRANCH_NAME.apk
           initial_comment: ${{ github.event.head_commit.message }}
 
