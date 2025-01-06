@@ -15,6 +15,8 @@ ENV ANDROID_BUILD_TOOLS_VERSION=34.0.0
 
 ENV FLUTTER_VERSION=3.24.0
 
+ENV HOME=/github/home
+RUN mkdir -p ${HOME} && rm -rf ${HOME} && cp -a /root ${HOME}
 
 # Heavily inspired by cirrusci images
 # https://github.com/cirruslabs/docker-images-android/blob/master/sdk/tools/Dockerfile
@@ -62,9 +64,9 @@ RUN wget https://go.dev/dl/go${GOLANG_VERSION}.linux-amd64.tar.gz &&\
     rm -rf /usr/local/go &&\
     tar -C /usr/local -xzf go${GOLANG_VERSION}.linux-amd64.tar.gz
 
-ENV PATH=${PATH}:/usr/local/go/bin:/root/go/bin
+ENV PATH=${PATH}:/usr/local/go/bin:${HOME}/go/bin
 ENV GOROOT=/usr/local/go
-ENV GOPATH=/root/go
+ENV GOPATH=${HOME}/go
 RUN go install golang.org/x/mobile/cmd/gomobile@latest
 RUN gomobile init
 
@@ -78,25 +80,29 @@ RUN wget -q https://dl.google.com/android/repository/commandlinetools-linux-${AN
     && yes | sdkmanager --licenses \
     && wget -O /usr/bin/android-wait-for-emulator https://raw.githubusercontent.com/travis-ci/travis-cookbooks/master/community-cookbooks/android-sdk/files/default/android-wait-for-emulator \
     && chmod +x /usr/bin/android-wait-for-emulator \
-    && touch /root/.android/repositories.cfg \
     && sdkmanager platform-tools \
-    && mkdir -p /root/.android \
-    && touch /root/.android/repositories.cfg \
+    && mkdir -p ${HOME}/.android \
+    && touch ${HOME}/.android/repositories.cfg \
     && git config --global user.email "czarek@cakewallet.com" \
     && git config --global user.name "CakeWallet CI"
 
 # emulator is not available on linux/arm64 (https://issuetracker.google.com/issues/227219818)
 RUN if [ $(uname -m) == "x86_64" ]; then sdkmanager emulator ; fi
 
+# Extra dependencies to not download them for cake wallet build
 RUN yes | sdkmanager \
     "platforms;android-$ANDROID_PLATFORM_VERSION" \
-    "build-tools;$ANDROID_BUILD_TOOLS_VERSION"
+    "build-tools;$ANDROID_BUILD_TOOLS_VERSION" \
+    "platforms;android-33" \
+    "build-tools;33.0.2" \
+    "build-tools;33.0.1" \
+    "build-tools;33.0.0"
 
 ENV ANDROID_NDK_VERSION=27.2.12479018
 
 RUN yes | sdkmanager "ndk;$ANDROID_NDK_VERSION"
 
-ENV PATH=/root/.cargo/bin:${PATH}
+ENV PATH=${HOME}/.cargo/bin:${PATH}
 
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y && \
     cargo install cargo-ndk && \
@@ -106,7 +112,7 @@ RUN curl https://sh.rustup.rs -sSf | bash -s -- -y && \
     done
 
 
-ENV HOME=/root
+ENV HOME=${HOME}
 ENV FLUTTER_HOME=${HOME}/sdks/flutter/${FLUTTER_VERSION}
 ENV FLUTTER_ROOT=$FLUTTER_HOME
 
