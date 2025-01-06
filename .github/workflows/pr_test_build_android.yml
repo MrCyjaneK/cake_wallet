@@ -19,12 +19,12 @@ jobs:
         STORE_PASS: test@cake_wallet
         KEY_PASS: test@cake_wallet
         PR_NUMBER: 1234
+        MONEROC_CACHE_DIR_ROOT: /opt/generic_cache
       volumes:
         - /opt/cw_cache/root/.cache:/root/.cache
         - /opt/cw_cache/root/.pub-cache/:/root/.pub-cache
         - /opt/cw_cache/root/.gradle/:/root/.gradle
         - /opt/cw_cache/root/.android/:/root/.android
-        - /opt/cw_cache/opt/android-sdk-linux/:/opt/android-sdk-linux
         - /opt/cw_cache/opt/generic_cache:/opt/generic_cache
     strategy:
       matrix:
@@ -39,6 +39,26 @@ jobs:
         if: github.event_name != 'pull_request'
         run: echo "BRANCH_NAME=${{ github.event.inputs.branch }}" >> /etc/environment
       - uses: actions/checkout@v4
+      - name: configure git
+        run: |
+          git config --global user.email "czarek@cakewallet.com"
+          git config --global user.name "CakeWallet CI"
+      - name: prepare monero_c and cache
+        run: |
+          MONEROC_HASH=$(cat scripts/prepare_moneroc.sh | grep 'git checkout' | xargs | awk '{ print $3 }')
+          echo MONEROC_HASH=$MONEROC_HASH >> /etc/environment
+          for cache_dir in contrib/depends/built contrib/depends/work {monero,wownero}/contrib/depends/{built,work}
+          do
+            mkdir -p $cache_dir || true
+            mkdir -p "${{ github.workspace }}/$MONEROC_HASH/contrib/depends/built" || true
+            mount --bind "$MONEROC_CACHE_DIR_ROOT/$MONEROC_HASH/contrib/depends/built" "${{ github.workspace }}/contrib/depends/built"
+          done
+
+          pushd scripts
+            ./prepare_moneroc.sh
+          popd
+
+
       - name: Setup tmate session
         uses: mxschmitt/action-tmate@v3
         with:
