@@ -11,7 +11,7 @@ on:
         default: "main"
 defaults:
   run:
-    shell: bash -x
+    shell: bash
 jobs:
   PR_test_build:
     runs-on: linux-amd64
@@ -184,6 +184,7 @@ jobs:
 
       - name: Build mwebd
         run: |
+          set -x -e
           export MWEBD_HASH=$(cat scripts/android/build_mwebd.sh | grep 'git reset --hard' | xargs | awk '{ print $4 }')
           echo MWEBD_HASH=$MWEBD_HASH >> /etc/environment
           mkdir -p "$MONEROC_CACHE_DIR_ROOT/mwebd-$MWEBD_HASH/mwebd"
