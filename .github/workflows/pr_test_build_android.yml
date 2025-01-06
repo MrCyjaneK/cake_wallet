@@ -184,26 +184,19 @@ jobs:
 
       - name: Build mwebd
         run: |
-          export MWEBD_HASH=$(cat build_mwebd.sh | grep 'git reset --hard' | xargs | awk '{ print $4 }')
+          export MWEBD_HASH=$(cat scripts/android/build_mwebd.sh | grep 'git reset --hard' | xargs | awk '{ print $4 }')
           echo MWEBD_HASH=$MWEBD_HASH >> /etc/environment
           mkdir -p "$MONEROC_CACHE_DIR_ROOT/mwebd-$MWEBD_HASH/mwebd"
           pushd scripts/android
+            rm -rf mwebd
             ln -s "$MONEROC_CACHE_DIR_ROOT/mwebd-$MWEBD_HASH/mwebd"
           popd
           pushd scripts/android
-
-            cd mwebd
-              if [[ -f mwebd.aar ]];
-              then
-                mkdir -p ${{ github.workspace }}/cw_mweb/android/libs/
-                cp mwebd.aar ${{ github.workspace }}/cw_mweb/android/libs/mwebd.aar
-                exit 0
-              else
-                rm -rf * .*
-              fi
-            cd ..
-            gomobile init
-            ./build_mwebd.sh --dont-install
+            cp mwebd/mwebd.aar ${{ github.workspace }}/cw_mweb/android/libs/mwebd.aar || (
+              gomobile init;
+              ./build_mwebd.sh --dont-install
+            )
+            
           popd
 
       - name: Build generated code
