@@ -23,18 +23,21 @@ jobs:
         MONEROC_CACHE_DIR_ROOT: /opt/generic_cache
         BRANCH_NAME: main
       volumes:
-        - /opt/cw_cache_android/github/home/.cache:/github/home/.cache
-        - /opt/cw_cache_android/github/home/.ccache:/github/home/.ccache
-        - /opt/cw_cache_android/github/home/.pub-cache/:/github/home/.pub-cache
-        - /opt/cw_cache_android/github/home/.gradle/:/github/home/.gradle
-        - /opt/cw_cache_android/github/home/.android/:/github/home/.android
-        - /opt/cw_cache_android/github/home/go/pkg:/github/home/go/pkg
+        - /opt/cw_cache_android/root/.cache:/root/.cache
+        - /opt/cw_cache_android/root/.ccache:/root/.ccache
+        - /opt/cw_cache_android/root/.pub-cache/:/root/.pub-cache
+        - /opt/cw_cache_android/root/.gradle/:/root/.gradle
+        - /opt/cw_cache_android/root/.android/:/root/.android
+        - /opt/cw_cache_android/root/go/pkg:/root/go/pkg
         - /opt/cw_cache_android/opt/generic_cache:/opt/generic_cache
     strategy:
       matrix:
         api-level: [29]
 
     steps:
+      - name: Fix github actions messing up $HOME...
+        shell: bash
+        run: 'echo HOME=/root | sudo tee -a $GITHUB_ENV'
       - uses: actions/checkout@v4
       - name: configure git
         run: |

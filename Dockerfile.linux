@@ -15,9 +15,10 @@ ENV ANDROID_BUILD_TOOLS_VERSION=34.0.0
 
 ENV FLUTTER_VERSION=3.24.0
 
-ENV HOME=/github/home
-RUN mkdir -p ${HOME} && rm -rf ${HOME} && cp -a /root ${HOME}
-
+# If we ever need to migrate the home directory...
+RUN sed -i 's|^root:[^:]*:[^:]*:[^:]*:[^:]*:/root:|root:x:0:0:root:/root:|' /etc/passwd
+# mkdir -p /root && rm -rf /root && cp -a /root /root
+ENV HOME=/root
 # Heavily inspired by cirrusci images
 # https://github.com/cirruslabs/docker-images-android/blob/master/sdk/tools/Dockerfile
 # https://github.com/cirruslabs/docker-images-android/blob/master/sdk/34/Dockerfile
