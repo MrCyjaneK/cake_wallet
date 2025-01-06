@@ -1,0 +1,121 @@
+# Usage:
+# docker build . -f Dockerfile.linux -t ghcr.io/mrcyjanek/cake_wallet:main
+# docker push ghcr.io/mrcyjanek/cake_wallet:main
+
+FROM --platform=linux/amd64 docker.io/debian:12
+
+LABEL org.opencontainers.image.source=https://github.com/cake-tech/cake_wallet
+
+ENV GOLANG_VERSION=1.23.4
+# comes from https://developer.android.com/studio/#command-tools
+ENV ANDROID_SDK_TOOLS_VERSION=11076708
+# https://developer.android.com/studio/releases/build-tools
+ENV ANDROID_PLATFORM_VERSION=34
+ENV ANDROID_BUILD_TOOLS_VERSION=34.0.0
+
+ENV FLUTTER_VERSION=3.24.0
+
+
+# Heavily inspired by cirrusci images
+# https://github.com/cirruslabs/docker-images-android/blob/master/sdk/tools/Dockerfile
+# https://github.com/cirruslabs/docker-images-android/blob/master/sdk/34/Dockerfile
+# https://github.com/cirruslabs/docker-images-android/blob/master/sdk/34-ndk/Dockerfile
+# https://github.com/cirruslabs/docker-images-flutter/blob/master/sdk/Dockerfile
+
+ENV ANDROID_HOME=/opt/android-sdk-linux \
+    LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8 \
+    LANGUAGE=en_US:en
+
+ENV ANDROID_SDK_ROOT=$ANDROID_HOME \
+    PATH=${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/emulator
+
+RUN set -o xtrace \
+    && cd /opt \
+    && apt-get update \
+    && apt-get install -y jq \
+    && apt-get install -y default-jdk \
+    && apt-get install -y sudo wget zip unzip git openssh-client curl bc software-properties-common build-essential ruby-full ruby-bundler libstdc++6 libpulse0 libglu1-mesa locales lcov libsqlite3-dev --no-install-recommends \
+    # for x86 emulators
+    && apt-get install -y libxtst6 libnss3-dev libnspr4 libxss1 libatk-bridge2.0-0 libgtk-3-0 libgdk-pixbuf2.0-0 \
+    && apt-get install -y -qq xxd \
+    && apt-get install -y lftp \
+    && apt-get install -qq -y sqlite3 libsqlite3-dev \
+    # linux desktop dependencies
+    && apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev \
+    # monero_c dependencies
+    && apt-get install -y ccache build-essential autoconf libtool gperf llvm \
+    && rm -rf /var/lib/apt/lists/* \
+    && sh -c 'echo "en_US.UTF-8 UTF-8" > /etc/locale.gen' \
+    && locale-gen \
+    && update-locale LANG=en_US.UTF-8
+
+# install nodejs for actions
+RUN apt-get update && \
+    apt-get install -y curl && \
+    curl -fsSL https://deb.nodesource.com/setup_23.x | bash - && \
+    apt-get install -y nodejs && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN wget https://go.dev/dl/go${GOLANG_VERSION}.linux-amd64.tar.gz &&\
+    rm -rf /usr/local/go &&\
+    tar -C /usr/local -xzf go${GOLANG_VERSION}.linux-amd64.tar.gz
+
+ENV PATH=${PATH}:/usr/local/go/bin:/root/go/bin
+ENV GOROOT=/usr/local/go
+ENV GOPATH=/root/go
+RUN go install golang.org/x/mobile/cmd/gomobile@latest
+RUN gomobile init
+
+RUN wget -q https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_SDK_TOOLS_VERSION}_latest.zip -O android-sdk-tools.zip \
+    && mkdir -p ${ANDROID_HOME}/cmdline-tools/ \
+    && unzip -q android-sdk-tools.zip -d ${ANDROID_HOME}/cmdline-tools/ \
+    && mv ${ANDROID_HOME}/cmdline-tools/cmdline-tools ${ANDROID_HOME}/cmdline-tools/latest \
+    && chown -R root:root $ANDROID_HOME \
+    && rm android-sdk-tools.zip \
+    && echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers \
+    && yes | sdkmanager --licenses \
+    && wget -O /usr/bin/android-wait-for-emulator https://raw.githubusercontent.com/travis-ci/travis-cookbooks/master/community-cookbooks/android-sdk/files/default/android-wait-for-emulator \
+    && chmod +x /usr/bin/android-wait-for-emulator \
+    && touch /root/.android/repositories.cfg \
+    && sdkmanager platform-tools \
+    && mkdir -p /root/.android \
+    && touch /root/.android/repositories.cfg \
+    && git config --global user.email "czarek@cakewallet.com" \
+    && git config --global user.name "CakeWallet CI"
+
+# emulator is not available on linux/arm64 (https://issuetracker.google.com/issues/227219818)
+RUN if [ $(uname -m) == "x86_64" ]; then sdkmanager emulator ; fi
+
+RUN yes | sdkmanager \
+    "platforms;android-$ANDROID_PLATFORM_VERSION" \
+    "build-tools;$ANDROID_BUILD_TOOLS_VERSION"
+
+ENV ANDROID_NDK_VERSION=27.2.12479018
+
+RUN yes | sdkmanager "ndk;$ANDROID_NDK_VERSION"
+
+ENV PATH=/root/.cargo/bin:${PATH}
+
+RUN curl https://sh.rustup.rs -sSf | bash -s -- -y && \
+    cargo install cargo-ndk && \
+    for target in aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android x86_64-unknown-linux-gnu; \
+    do \
+        rustup target add --toolchain stable $target; \
+    done
+
+
+ENV HOME=/root
+ENV FLUTTER_HOME=${HOME}/sdks/flutter/${FLUTTER_VERSION}
+ENV FLUTTER_ROOT=$FLUTTER_HOME
+
+ENV PATH=${PATH}:${FLUTTER_HOME}/bin:${FLUTTER_HOME}/bin/cache/dart-sdk/bin
+
+RUN git clone --depth 1 --branch ${FLUTTER_VERSION} https://github.com/flutter/flutter.git ${FLUTTER_HOME}
+
+RUN yes | flutter doctor --android-licenses \
+    && flutter doctor \
+    && chown -R root:root ${FLUTTER_HOME}
+
+RUN flutter precache

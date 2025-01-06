@@ -3,7 +3,7 @@ set -x -e
 
 for cwcoin in cw_{core,evm,monero,bitcoin,haven,nano,bitcoin_cash,solana,tron,wownero}
 do
-    if [[ "x$1 " == "async" ]];
+    if [[ "x$1" == "xasync" ]];
     then
         bash -c "cd $cwcoin; flutter pub get; dart run build_runner build --delete-conflicting-outputs; cd .." &
     else
@@ -12,7 +12,7 @@ do
 done
 for cwcoin in cw_{polygon,ethereum,mwebd};
 do        
-    if [[ "x$1 " == "async" ]];
+    if [[ "x$1" == "xasync" ]];
     then
         bash -c "cd cw_polygon; flutter pub get; cd .." &
     else
