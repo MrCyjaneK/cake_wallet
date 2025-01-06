@@ -36,86 +36,12 @@ jobs:
 
     steps:
       - name: Fix github actions messing up $HOME...
-        shell: bash
         run: 'echo HOME=/root | sudo tee -a $GITHUB_ENV'
       - uses: actions/checkout@v4
       - name: configure git
         run: |
           git config --global user.email "czarek@cakewallet.com"
           git config --global user.name "CakeWallet CI"
-
-      - name: prepare monero_c and cache
-        run: |
-          export MONEROC_HASH=$(cat scripts/prepare_moneroc.sh | grep 'git checkout' | xargs | awk '{ print $3 }')
-          echo MONEROC_HASH=$MONEROC_HASH >> /etc/environment
-          mkdir -p "$MONEROC_CACHE_DIR_ROOT/moneroc-$MONEROC_HASH/monero_c"
-          pushd scripts
-            ln -s "$MONEROC_CACHE_DIR_ROOT/moneroc-$MONEROC_HASH/monero_c"
-            ./prepare_moneroc.sh
-          popd
-
-      - name: Generate KeyStore
-        run: |
-          pushd /opt/generic_cache
-            if [[ ! -f key.jks ]];
-            then
-              keytool -genkey -v -keystore key.jks -keyalg RSA -keysize 2048 -validity 10000 -alias testKey -noprompt -dname "CN=CakeWallet, OU=CakeWallet, O=CakeWallet, L=Florida, S=America, C=USA" -storepass $STORE_PASS -keypass $KEY_PASS
-            else
-              echo "$PWD/key.jks exist, not generating"
-            fi
-          popd
-          cp /opt/generic_cache/key.jks android/app
-
-      - name: Execute Build and Setup Commands
-        run: |
-          pushd scripts/android
-            source ./app_env.sh cakewallet
-            ./app_config.sh
-          popd
-
-      - name: Build monero_c
-        run: |
-          pushd scripts/android/
-            source ./app_env.sh cakewallet
-            ./build_monero_all.sh
-          popd
-
-      - name: Install Flutter dependencies
-        run: |
-          flutter pub get
-
-      - name: Build mwebd
-        run: |
-          export MWEBD_HASH=$(cat build_mwebd.sh | grep 'git reset --hard' | xargs | awk '{ print $4 }')
-          echo MWEBD_HASH=$MWEBD_HASH >> /etc/environment
-          mkdir -p "$MONEROC_CACHE_DIR_ROOT/mwebd-$MWEBD_HASH/mwebd"
-          pushd scripts/android
-            ln -s "$MONEROC_CACHE_DIR_ROOT/mwebd-$MWEBD_HASH/mwebd"
-          popd
-          pushd scripts/android
-            pushd mwebd
-              if [[ -f mwebd.aar ]];
-              then
-                cp mwebd.aar ../../../cw_mweb/android/libs/
-                exit 0
-              fi
-            popd
-            gomobile init
-            ./build_mwebd.sh --dont-install
-          popd
-
-      - name: Build generated code
-        run: |
-          ./model_generator.sh async
-
-      - name: Generate key properties
-        run: |
-          dart run tool/generate_android_key_properties.dart keyAlias=testKey storeFile=key.jks storePassword=$STORE_PASS keyPassword=$KEY_PASS
-
-      - name: Generate localization
-        run: |
-          dart run tool/generate_localization.dart
-
       - name: Add secrets
         run: |
           touch lib/.secrets.g.dart
@@ -215,6 +141,78 @@ jobs:
           echo "const letsExchangeAffiliateId = '${{ secrets.LETS_EXCHANGE_AFFILIATE_ID }}';" >> lib/.secrets.g.dart
           echo "const stealthExBearerToken = '${{ secrets.STEALTH_EX_BEARER_TOKEN }}';" >> lib/.secrets.g.dart
           echo "const stealthExAdditionalFeePercent = '${{ secrets.STEALTH_EX_ADDITIONAL_FEE_PERCENT }}';" >> lib/.secrets.g.dart
+  
+      - name: prepare monero_c and cache
+        run: |
+          export MONEROC_HASH=$(cat scripts/prepare_moneroc.sh | grep 'git checkout' | xargs | awk '{ print $3 }')
+          echo MONEROC_HASH=$MONEROC_HASH >> /etc/environment
+          mkdir -p "$MONEROC_CACHE_DIR_ROOT/moneroc-$MONEROC_HASH/monero_c"
+          pushd scripts
+            ln -s "$MONEROC_CACHE_DIR_ROOT/moneroc-$MONEROC_HASH/monero_c"
+            ./prepare_moneroc.sh
+          popd
+
+      - name: Generate KeyStore
+        run: |
+          pushd /opt/generic_cache
+            if [[ ! -f key.jks ]];
+            then
+              keytool -genkey -v -keystore key.jks -keyalg RSA -keysize 2048 -validity 10000 -alias testKey -noprompt -dname "CN=CakeWallet, OU=CakeWallet, O=CakeWallet, L=Florida, S=America, C=USA" -storepass $STORE_PASS -keypass $KEY_PASS
+            else
+              echo "$PWD/key.jks exist, not generating"
+            fi
+          popd
+          cp /opt/generic_cache/key.jks android/app
+
+      - name: Execute Build and Setup Commands
+        run: |
+          pushd scripts/android
+            source ./app_env.sh cakewallet
+            ./app_config.sh
+          popd
+
+      - name: Build monero_c
+        run: |
+          pushd scripts/android/
+            source ./app_env.sh cakewallet
+            ./build_monero_all.sh
+          popd
+
+      - name: Install Flutter dependencies
+        run: |
+          flutter pub get
+
+      - name: Build mwebd
+        run: |
+          export MWEBD_HASH=$(cat build_mwebd.sh | grep 'git reset --hard' | xargs | awk '{ print $4 }')
+          echo MWEBD_HASH=$MWEBD_HASH >> /etc/environment
+          mkdir -p "$MONEROC_CACHE_DIR_ROOT/mwebd-$MWEBD_HASH/mwebd"
+          pushd scripts/android
+            ln -s "$MONEROC_CACHE_DIR_ROOT/mwebd-$MWEBD_HASH/mwebd"
+          popd
+          pushd scripts/android
+            pushd mwebd
+              if [[ -f mwebd.aar ]];
+              then
+                cp mwebd.aar ../../../cw_mweb/android/libs/
+                exit 0
+              fi
+            popd
+            gomobile init
+            ./build_mwebd.sh --dont-install
+          popd
+
+      - name: Build generated code
+        run: |
+          ./model_generator.sh async
+
+      - name: Generate key properties
+        run: |
+          dart run tool/generate_android_key_properties.dart keyAlias=testKey storeFile=key.jks storePassword=$STORE_PASS keyPassword=$KEY_PASS
+
+      - name: Generate localization
+        run: |
+          dart run tool/generate_localization.dart
 
       - name: Rename app
         run: |
