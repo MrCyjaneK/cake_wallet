@@ -24,6 +24,7 @@ jobs:
         BRANCH_NAME: main
       volumes:
         - /opt/cw_cache_android/root/.cache:/root/.cache
+        - /opt/cw_cache_android/root/.ccache:/root/.ccache
         - /opt/cw_cache_android/root/.pub-cache/:/root/.pub-cache
         - /opt/cw_cache_android/root/.gradle/:/root/.gradle
         - /opt/cw_cache_android/root/.android/:/root/.android
