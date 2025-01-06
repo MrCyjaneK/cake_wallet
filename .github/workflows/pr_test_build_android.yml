@@ -194,8 +194,11 @@ jobs:
             pushd mwebd
               if [[ -f mwebd.aar ]];
               then
+                mkdir -p ../../../cw_mweb/android/libs/
                 cp mwebd.aar ../../../cw_mweb/android/libs/
                 exit 0
+              else
+                rm -rf * .*
               fi
             popd
             gomobile init
