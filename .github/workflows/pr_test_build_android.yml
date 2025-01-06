@@ -195,8 +195,7 @@ jobs:
             cp mwebd/mwebd.aar ${{ github.workspace }}/cw_mweb/android/libs/mwebd.aar || (
               gomobile init;
               ./build_mwebd.sh --dont-install
-            )
-            
+            ) && cp mwebd/mwebd.aar ${{ github.workspace }}/cw_mweb/android/libs/mwebd.aar
           popd
 
       - name: Build generated code
