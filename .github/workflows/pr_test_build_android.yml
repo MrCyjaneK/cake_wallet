@@ -195,7 +195,7 @@ jobs:
               if [[ -f mwebd.aar ]];
               then
                 mkdir -p ../../../cw_mweb/android/libs/
-                cp mwebd.aar ../../../cw_mweb/android/libs/
+                cp mwebd.aar ../../../cw_mweb/android/libs/mwebd.aar
                 exit 0
               else
                 rm -rf * .*
