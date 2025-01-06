@@ -20,7 +20,6 @@ jobs:
       env:
         STORE_PASS: test@cake_wallet
         KEY_PASS: test@cake_wallet
-        PR_NUMBER: 1234
         MONEROC_CACHE_DIR_ROOT: /opt/generic_cache
         BRANCH_NAME: main
       volumes:
@@ -35,22 +34,12 @@ jobs:
         api-level: [29]
 
     steps:
-      - name: is pr
-        if: github.event_name == 'pull_request'
-        run: echo "BRANCH_NAME=${GITHUB_HEAD_REF}" >> /etc/environment
-
-      - name: is not pr
-        if: github.event_name != 'pull_request'
-        run: echo "BRANCH_NAME=${{ github.event.inputs.branch }}" >> /etc/environment
       - uses: actions/checkout@v4
       - name: configure git
         run: |
           git config --global user.email "czarek@cakewallet.com"
           git config --global user.name "CakeWallet CI"
-      # - name: Setup tmate session
-      #   uses: mxschmitt/action-tmate@v3
-      #   with:
-      #     limit-access-to-actor: false
+
       - name: prepare monero_c and cache
         run: |
           export MONEROC_HASH=$(cat scripts/prepare_moneroc.sh | grep 'git checkout' | xargs | awk '{ print $3 }')
@@ -212,7 +201,12 @@ jobs:
 
       - name: Rename app
         run: |
-          echo -e "id=com.cakewallet.test_$PR_NUMBER\nname=$BRANCH_NAME" > android/app.properties
+          sanitized_branch_name=${BRANCH_NAME#origin/}  # Remove 'origin/' prefix if it exists
+          sanitized_branch_name=${sanitized_branch_name:0:16}  # Take only the first 16 characters
+          sanitized_branch_name=$(echo "$sanitized_branch_name" | tr '[:upper:]' '[:lower:]')  # Convert to lowercase
+          sanitized_branch_name=$(echo "$sanitized_branch_name" | sed 's/[^a-z0-9_-]//g')  # Remove all special characters
+
+          echo -e "id=com.cakewallet.test_${sanitized_branch_name}\nname=${BRANCH_NAME}" > android/app.properties
 
       # Step 3: Download previous build number
       - name: Download previous build number
@@ -241,17 +235,15 @@ jobs:
       # Step 5: Update pubspec.yaml with new build number
       - name: Update build number
         run: |
-          cd /opt/android/cake_wallet
           sed -i "s/^version: .*/version: 1.0.$BUILD_NUMBER/" pubspec.yaml
 
       - name: Build
         run: |
-          cd /opt/android/cake_wallet
           flutter build apk --release --split-per-abi
 
       - name: Rename apk file
         run: |
-          cd /opt/android/cake_wallet/build/app/outputs/flutter-apk
+          cd build/app/outputs/flutter-apk
           mkdir test-apk
           cp app-arm64-v8a-release.apk test-apk/$BRANCH_NAME.apk
           cp app-x86_64-release.apk test-apk/${BRANCH_NAME}_x86.apk
