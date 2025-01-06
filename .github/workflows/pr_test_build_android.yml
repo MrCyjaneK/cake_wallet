@@ -208,7 +208,7 @@ jobs:
           sanitized_branch_name=${BRANCH_NAME#origin/}  # Remove 'origin/' prefix if it exists
           sanitized_branch_name=${sanitized_branch_name:0:16}  # Take only the first 16 characters
           sanitized_branch_name=$(echo "$sanitized_branch_name" | tr '[:upper:]' '[:lower:]')  # Convert to lowercase
-          sanitized_branch_name=$(echo "$sanitized_branch_name" | sed 's/[^a-z0-9_-]//g')  # Remove all special characters
+          sanitized_branch_name=$(echo "$sanitized_branch_name" | sed 's/[^a-z0-9]//g')  # Remove all special characters
 
           echo -e "id=com.cakewallet.test_${sanitized_branch_name}\nname=${BRANCH_NAME}" > android/app.properties
 
