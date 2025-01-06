@@ -11,7 +11,7 @@ on:
         default: "main"
 defaults:
   run:
-    shell: bash
+    shell: bash -x
 jobs:
   PR_test_build:
     runs-on: linux-amd64
