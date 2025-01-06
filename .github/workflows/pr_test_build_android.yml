@@ -43,9 +43,13 @@ jobs:
         run: |
           git config --global user.email "czarek@cakewallet.com"
           git config --global user.name "CakeWallet CI"
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: false
       - name: prepare monero_c and cache
         run: |
-          MONEROC_HASH=$(cat scripts/prepare_moneroc.sh | grep 'git checkout' | xargs | awk '{ print $3 }')
+          export MONEROC_HASH=$(cat scripts/prepare_moneroc.sh | grep 'git checkout' | xargs | awk '{ print $3 }')
           echo MONEROC_HASH=$MONEROC_HASH >> /etc/environment
           for cache_dir in contrib/depends/built contrib/depends/work {monero,wownero}/contrib/depends/{built,work}
           do
@@ -58,11 +62,6 @@ jobs:
             ./prepare_moneroc.sh
           popd
 
-
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
-        with:
-          limit-access-to-actor: false
 
       - name: Clone Repo
         run: |
