@@ -191,16 +191,17 @@ jobs:
             ln -s "$MONEROC_CACHE_DIR_ROOT/mwebd-$MWEBD_HASH/mwebd"
           popd
           pushd scripts/android
-            pushd mwebd
+
+            cd mwebd
               if [[ -f mwebd.aar ]];
               then
-                mkdir -p ../../../cw_mweb/android/libs/
-                cp mwebd.aar ../../../cw_mweb/android/libs/mwebd.aar
+                mkdir -p ${{ github.workspace }}/cw_mweb/android/libs/
+                cp mwebd.aar ${{ github.workspace }}/cw_mweb/android/libs/mwebd.aar
                 exit 0
               else
                 rm -rf * .*
               fi
-            popd
+            cd ..
             gomobile init
             ./build_mwebd.sh --dont-install
           popd
