@@ -48,9 +48,9 @@ jobs:
         run: |
           export MONEROC_HASH=$(cat scripts/prepare_moneroc.sh | grep 'git checkout' | xargs | awk '{ print $3 }')
           echo MONEROC_HASH=$MONEROC_HASH >> /etc/environment
-          mkdir -p "$MONEROC_CACHE_DIR_ROOT/$MONEROC_HASH/monero_c"
+          mkdir -p "$MONEROC_CACHE_DIR_ROOT/moneroc-$MONEROC_HASH/monero_c"
           pushd scripts
-            ln -s "$MONEROC_CACHE_DIR_ROOT/$MONEROC_HASH/monero_c"
+            ln -s "$MONEROC_CACHE_DIR_ROOT/moneroc-$MONEROC_HASH/monero_c"
             ./prepare_moneroc.sh
           popd
 
@@ -86,7 +86,20 @@ jobs:
 
       - name: Build mwebd
         run: |
+          export MWEBD_HASH=$(cat build_mwebd.sh | grep 'git reset --hard' | xargs | awk '{ print $4 }')
+          echo MWEBD_HASH=$MWEBD_HASH >> /etc/environment
+          mkdir -p "$MONEROC_CACHE_DIR_ROOT/mwebd-$MWEBD_HASH/mwebd"
           pushd scripts/android
+            ln -s "$MONEROC_CACHE_DIR_ROOT/mwebd-$MWEBD_HASH/mwebd"
+          popd
+          pushd scripts/android
+            pushd mwebd
+              if [[ -f mwebd.aar ]];
+              then
+                cp mwebd.aar ../../../cw_mweb/android/libs/
+                exit 0
+              fi
+            popd
             gomobile init
             ./build_mwebd.sh --dont-install
           popd
