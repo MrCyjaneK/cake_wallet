@@ -1,8 +1,8 @@
 name: PR Test Build
 
 on:
-  pull_request:
-    branches: [main]
+  push:
+    branches: [ci-test]
   workflow_dispatch:
     inputs:
       branch:
@@ -12,55 +12,37 @@ on:
 
 jobs:
   PR_test_build:
-    runs-on: ubuntu-20.04
+    runs-on: linux-amd64
+    container:
+      image: ghcr.io/mrcyjanek/cake_wallet:main
+      env:
+        STORE_PASS: test@cake_wallet
+        KEY_PASS: test@cake_wallet
+        PR_NUMBER: 1234
+      volumes:
+        - /opt/cw_cache/root/.cache:/root/.cache
+        - /opt/cw_cache/root/.pub-cache/:/root/.pub-cache
+        - /opt/cw_cache/root/.gradle/:/root/.gradle
+        - /opt/cw_cache/root/.android/:/root/.android
+        - /opt/cw_cache/opt/android-sdk-linux/:/opt/android-sdk-linux
+        - /opt/cw_cache/opt/generic_cache:/opt/generic_cache
     strategy:
       matrix:
         api-level: [29]
-    env:
-      STORE_PASS: test@cake_wallet
-      KEY_PASS: test@cake_wallet
-      PR_NUMBER: ${{ github.event.number }}
 
     steps:
       - name: is pr
         if: github.event_name == 'pull_request'
-        run: echo "BRANCH_NAME=${GITHUB_HEAD_REF}" >> $GITHUB_ENV
+        run: echo "BRANCH_NAME=${GITHUB_HEAD_REF}" >> /etc/environment
 
       - name: is not pr
         if: github.event_name != 'pull_request'
-        run: echo "BRANCH_NAME=${{ github.event.inputs.branch }}" >> $GITHUB_ENV
-
-      - name: Free Disk Space (Ubuntu)
-        uses: insightsengineering/disk-space-reclaimer@v1
+        run: echo "BRANCH_NAME=${{ github.event.inputs.branch }}" >> /etc/environment
+      - uses: actions/checkout@v4
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
         with:
-          tools-cache: true
-          android: false
-          dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: true
-          docker-images: true
-
-      - uses: actions/checkout@v2
-      - uses: actions/setup-java@v2
-        with:
-          distribution: "temurin"
-          java-version: "17"
-      - name: Configure placeholder git details
-        run: |
-          git config --global user.email "CI@cakewallet.com"
-          git config --global user.name "Cake Github Actions"
-      - name: Flutter action
-        uses: subosito/flutter-action@v1
-        with:
-          flutter-version: "3.24.0"
-          channel: stable
-
-      - name: Install package dependencies
-        run: |
-          sudo apt update
-          sudo apt-get install -y curl unzip automake build-essential file pkg-config git python libtool libtinfo5 cmake clang
-
+          limit-access-to-actor: false
 
       - name: Clone Repo
         run: |
