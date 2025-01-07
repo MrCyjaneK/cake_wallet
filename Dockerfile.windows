@@ -27,10 +27,10 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1; \
     Remove-Item -Force install.ps1
 
-RUN choco install -y visualstudio2022community
-RUN choco install -y visualstudio2022-workload-nativedesktop
-RUN choco install -y nodejs
-RUN choco install -y go
+RUN choco install -y visualstudio2022community \
+    visualstudio2022-workload-nativedesktop \
+    nodejs \
+    go
 
 RUN powershell -Command \
     curl.exe -L https://win.rustup.rs -o rustup-init.exe; \
@@ -38,12 +38,12 @@ RUN powershell -Command \
     Remove-Item -Force .\rustup-init.exe
 
 RUN powershell -Command \
-    curl.exe -L https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -o C:\\Windows\\System32\\nuget.exe
+    curl.exe -L https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -o C:\Windows\System32\nuget.exe
 
 RUN powershell -Command \
     $FLUTTER_VERSION = [Environment]::GetEnvironmentVariable('FLUTTER_VERSION'); \
     curl.exe -L https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_$($FLUTTER_VERSION)-stable.zip -o flutter.zip ; \
-    Expand-Archive -Path flutter.zip -DestinationPath C:\flutter ; \
+    Expand-Archive -Path flutter.zip -DestinationPath C:\flutter -Verbose ; \
     Remove-Item -Force flutter.zip
 
 ENV PATH="C:\Users\ContainerAdministrator\.cargo\bin;C:\ProgramData\chocolatey\bin;C:\flutter\flutter\bin;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;C:\Users\ContainerAdministrator\AppData\Local\Microsoft\WindowsApps"
