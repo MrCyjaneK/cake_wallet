@@ -6,26 +6,15 @@ on:
 
 defaults:
   run:
-    shell: bash
+    shell: powershell
 jobs:
   PR_test_build_windows:
-    runs-on: windows-amd64
-    container:
-      image: ghcr.io/mrcyjanek/cake_wallet:main-windows
-      env:
-        STORE_PASS: test@cake_wallet
-        KEY_PASS: test@cake_wallet
-        BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
-    strategy:
-      matrix:
-        api-level: [29]
+    runs-on: windows-amd64-cake
+    env:
+      BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
 
     steps:
       - uses: actions/checkout@v4
-      - name: configure git
-        run: |
-          git config --global user.email "czarek@cakewallet.com"
-          git config --global user.name "CakeWallet CI"
       - name: Add secrets
         run: |
           touch lib/.secrets.g.dart
