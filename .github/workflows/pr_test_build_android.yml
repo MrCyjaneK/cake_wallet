@@ -1,4 +1,4 @@
-name: PR Test Build
+name: Cake Wallet Android
 
 on:
   push:
@@ -11,7 +11,7 @@ jobs:
   PR_test_build:
     runs-on: linux-amd64
     container:
-      image: ghcr.io/mrcyjanek/cake_wallet:main
+      image: ghcr.io/mrcyjanek/cake_wallet:main-linux
       env:
         STORE_PASS: test@cake_wallet
         KEY_PASS: test@cake_wallet
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: configure git
         run: |
-          git config --global user.email "czarek@cakewallet.com"
+          git config --global user.email "ci@cakewallet.com"
           git config --global user.name "CakeWallet CI"
       - name: Add secrets
         run: |
