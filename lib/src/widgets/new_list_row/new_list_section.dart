@@ -96,10 +96,13 @@ class NewListSections extends StatelessWidget {
         subtitle: item.subtitle,
         trailingText: item.trailingText,
         iconPath: item.iconPath,
+        trailingIconPath: item.trailingIconPath,
         onTap: tapHandlers[item.keyValue] ?? item.onTap,
         isFirstInSection: isFirst,
         isLastInSection: isLast,
         showArrow: item.showArrow,
+        foregroundColor: item.foregroundColor,
+        trailingIconSize: item.trailingIconSize,
       );
     }
 

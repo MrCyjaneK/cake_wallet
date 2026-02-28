@@ -5,7 +5,6 @@ import 'package:cake_wallet/di.dart';
 import 'package:cake_wallet/entities/parse_address_from_domain.dart';
 import 'package:cake_wallet/entities/qr_scanner.dart';
 import 'package:cake_wallet/exchange/exchange_trade_state.dart';
-import 'package:cake_wallet/exchange/limits_state.dart';
 import 'package:cake_wallet/exchange/provider/chainflip_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/thorchain_exchange.provider.dart';
 import 'package:cake_wallet/generated/i18n.dart';
@@ -18,6 +17,7 @@ import 'package:cake_wallet/new-ui/widgets/swap_page/provider_selector_page.dart
 import 'package:cake_wallet/new-ui/widgets/swap_page/refund_address_modal.dart';
 import 'package:cake_wallet/new-ui/widgets/swap_page/swap_address_selection_modal.dart';
 import 'package:cake_wallet/new-ui/widgets/swap_page/swap_confirm_sheet.dart';
+import 'package:cake_wallet/new-ui/widgets/swap_page/swap_limit_popup.dart';
 import 'package:cake_wallet/new-ui/widgets/swap_page/swap_options_page.dart';
 import 'package:cake_wallet/new-ui/widgets/swap_page/swap_provider_initial_preference_modal.dart';
 import 'package:cake_wallet/src/screens/exchange/widgets/currency_picker.dart';
@@ -120,10 +120,12 @@ class _NewSwapPageState extends State<NewSwapPage> {
       final depositFiatAmountController = depositKey.currentState!.fiatAmountController;
       final receiveFiatAmountController = receiveKey.currentState!.fiatAmountController;
 
-      final limitsState = widget.exchangeViewModel.limitsState;
-      if (limitsState is LimitsLoadedSuccessfully) {}
 
       depositFiatAmountController.addListener(() {
+        if(!depositKey.currentState!.amountFocusNode.hasFocus) {
+          return;
+        }
+        widget.exchangeViewModel.isFixedRateMode = false;
         Future.delayed(Duration(milliseconds: 200)).then((_) {
           if (double.tryParse(depositFiatAmountController.text) != null) {
             widget.exchangeViewModel
@@ -133,6 +135,10 @@ class _NewSwapPageState extends State<NewSwapPage> {
         });
       });
       receiveFiatAmountController.addListener(() {
+        if(!receiveKey.currentState!.amountFocusNode.hasFocus) {
+          return;
+        }
+        widget.exchangeViewModel.enableFixedRateMode();
         Future.delayed(Duration(milliseconds: 200)).then((_) {
           if (double.tryParse(receiveFiatAmountController.text) != null) {
             String text = receiveFiatAmountController.text;
@@ -143,6 +149,15 @@ class _NewSwapPageState extends State<NewSwapPage> {
             widget.exchangeViewModel
                 .setReceiveAmountFromFiat(fiatAmount: receiveFiatAmountController.text);
             depositKey.currentState!.updateFiatAmount();
+          }
+        });
+      });
+      reaction((_) => widget.exchangeViewModel.isFixedRateMode, (val) {
+        Future.delayed(Duration(seconds: 3)).then((_) {
+          if (val) {
+            depositKey.currentState!.updateFiatAmount();
+          } else {
+            receiveKey.currentState!.updateFiatAmount();
           }
         });
       });
@@ -206,20 +221,25 @@ class _NewSwapPageState extends State<NewSwapPage> {
       reaction((_) => widget.exchangeViewModel.tradeState, (ExchangeTradeState state) {
         if (state is TradeIsCreatedFailure) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            showPopUp<void>(
-                context: context,
-                builder: (BuildContext context) {
-                  return AlertWithOneAction(
-                      key: ValueKey('exchange_page_trade_creation_failure_dialog_key'),
-                      buttonKey: ValueKey('exchange_page_trade_creation_failure_dialog_button_key'),
-                      alertTitle: S.of(context).provider_error(state.title),
-                      alertContent: state.error,
-                      buttonText: S.of(context).ok,
-                      buttonAction: () => Navigator.of(context).pop());
-                });
+            if (mounted) {
+              showPopUp<void>(
+                  context: context,
+                  builder: (BuildContext context) {
+                    return AlertWithOneAction(
+                        key: ValueKey('exchange_page_trade_creation_failure_dialog_key'),
+                        buttonKey:
+                            ValueKey('exchange_page_trade_creation_failure_dialog_button_key'),
+                        alertTitle: S.of(context).provider_error(state.title),
+                        alertContent: state.error,
+                        buttonText: S.of(context).ok,
+                        buttonAction: () => Navigator.of(context).pop());
+                  });
+            }
           });
         }
         if (state is TradeIsCreatedSuccessfully) {
+
+          if(widget.exchangeViewModel.tradeStarted) return;
           final receiveAmount = widget.exchangeViewModel.receiveAmount;
           // FIXME we don't know why a reset is/was needed here, it messes up ui so i removed it
           // widget.exchangeViewModel.reset();
@@ -229,6 +249,7 @@ class _NewSwapPageState extends State<NewSwapPage> {
           //             ExchangeProviderDescription.chainflip)
           //     ? Navigator.of(context).pushReplacementNamed(Routes.exchangeTrade)
           //     : Navigator.of(context).pushReplacementNamed(Routes.exchangeConfirm);
+          widget.exchangeViewModel.tradeStarted = true;
           final vm = getIt.get<ExchangeTradeViewModel>();
           final page = SwapConfirmSheet(
             exchangeViewModel: widget.exchangeViewModel,
@@ -238,29 +259,6 @@ class _NewSwapPageState extends State<NewSwapPage> {
           showMaterialModalBottomSheet(
               context: context, builder: (context) => page, backgroundColor: Colors.transparent);
         }
-      });
-
-      reaction((_) => widget.exchangeViewModel.limitsState, (LimitsState state) {
-        String? min;
-        String? max;
-
-        if (state is LimitsLoadedSuccessfully) {
-          min = state.limits.min != null ? state.limits.min.toString() : null;
-          max = state.limits.max != null ? state.limits.max.toString() : null;
-        }
-
-        if (state is LimitsLoadedFailure) {
-          min = '0';
-          max = '0';
-        }
-
-        if (state is LimitsIsLoading) {
-          min = '...';
-          max = '...';
-        }
-
-        if (widget.exchangeViewModel.isFixedRateMode) {
-        } else {}
       });
 
       reaction((_) => widget.exchangeViewModel.bestRate, (double rate) {
@@ -296,6 +294,10 @@ class _NewSwapPageState extends State<NewSwapPage> {
             widget.exchangeViewModel.calculateBestRate();
             widget.exchangeViewModel.changeDepositAmount(amount: depositAmountController.text);
             widget.exchangeViewModel.isReceiveAmountEntered = false;
+            widget.exchangeViewModel.isFixedRateMode = false;
+            if(!receiveKey.currentState!.amountFocusNode.hasFocus) {
+              receiveKey.currentState!.updateFiatAmount();
+            }
           });
         }
       });
@@ -309,6 +311,10 @@ class _NewSwapPageState extends State<NewSwapPage> {
             widget.exchangeViewModel.calculateBestRate();
             widget.exchangeViewModel.changeReceiveAmount(amount: receiveAmountController.text);
             widget.exchangeViewModel.isReceiveAmountEntered = true;
+            widget.exchangeViewModel.enableFixedRateMode();
+            if(!depositKey.currentState!.amountFocusNode.hasFocus) {
+              depositKey.currentState!.updateFiatAmount();
+            }
           });
         }
       });
@@ -460,7 +466,6 @@ class _NewSwapPageState extends State<NewSwapPage> {
                       Form(
                         key: formKey,
                         child: Column(
-                          spacing: 12,
                           children: [
                             Observer(
                               builder: (_) => SwapAmountBox(
@@ -512,21 +517,25 @@ class _NewSwapPageState extends State<NewSwapPage> {
                                 },
                               ),
                             ),
-                            Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                Container(
-                                  height: 1,
-                                  width: double.infinity,
-                                  color: Theme.of(context).colorScheme.surfaceContainerHigh,
-                                ),
-                                ModernButton.svg(
-                                  size: 36,
-                                  iconSize: 24,
-                                  svgPath: "assets/new-ui/swap_amounts.svg",
-                                  onPressed: widget.exchangeViewModel.reverseSwapDirection,
-                                ),
-                              ],
+                            SwapLimitPopup(exchangeViewModel: widget.exchangeViewModel),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 12.0),
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  Container(
+                                    height: 1,
+                                    width: double.infinity,
+                                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                                  ),
+                                  ModernButton.svg(
+                                    size: 36,
+                                    iconSize: 24,
+                                    svgPath: "assets/new-ui/swap_amounts.svg",
+                                    onPressed: widget.exchangeViewModel.reverseSwapDirection,
+                                  ),
+                                ],
+                              ),
                             ),
                             Observer(
                               builder: (_) => SwapAmountBox(
@@ -582,6 +591,8 @@ class _NewSwapPageState extends State<NewSwapPage> {
                           children: [
                             if (widget.exchangeViewModel.status is! SyncedSyncStatus)
                               SendSyncingIndicator(status: widget.exchangeViewModel.status),
+                            if(widget.exchangeViewModel.isFixedRateMode)
+                              Text(S.of(context).exchange_rate_is_fixed, style:TextStyle(color:Theme.of(context).colorScheme.onSurfaceVariant,fontSize:12)),
                             SwapProviderPreview(exchangeViewModel: widget.exchangeViewModel),
                             Observer(
                               builder: (_) => LoadingPrimaryButton(
@@ -796,6 +807,7 @@ class SwapAmountBoxState extends State<SwapAmountBox> {
   final addressController = TextEditingController();
   final amountController = TextEditingController();
   final fiatAmountController = TextEditingController();
+  final amountFocusNode = FocusNode();
 
   @override
   void initState() {
@@ -812,7 +824,7 @@ class SwapAmountBoxState extends State<SwapAmountBox> {
     final currencyToShow = _fiatInputMode
         ? widget.exchangeViewModel.fiat.title
         : (_selectedCurrency is CryptoCurrency)
-            ? (_selectedCurrency as CryptoCurrency).title.toUpperCase()
+            ? widget.exchangeViewModel.amountParsingProxy.getCryptoSymbol(_selectedCurrency as CryptoCurrency)
             : _selectedCurrency.name.toUpperCase();
 
     return Column(
@@ -840,8 +852,9 @@ class SwapAmountBoxState extends State<SwapAmountBox> {
                     Expanded(
                         child: TextFormField(
                           keyboardType: TextInputType.numberWithOptions(signed:false,decimal:true),
-                      validator: widget.currencyValueValidator,
+                      validator: _fiatInputMode ? null : widget.currencyValueValidator,
                       controller: _fiatInputMode ? fiatAmountController : amountController,
+                      focusNode: amountFocusNode,
                       style: TextStyle(
                           fontSize: 28,
                           color: Theme.of(context).colorScheme.onSurface,
@@ -895,17 +908,25 @@ class SwapAmountBoxState extends State<SwapAmountBox> {
                   ],
                 ),
                 Observer(
-                  builder: (_) => FiatAmountBar(
-                      foregroundElementColor: Theme.of(context).colorScheme.surfaceContainerHigh,
-                      textColor: Theme.of(context).colorScheme.onSurfaceVariant,
-                      fiatInputMode: _fiatInputMode,
-                      allAmount: widget.isReceiverCard ||
-                              widget.exchangeViewModel.isSendFromExternal ||
-                              !widget.exchangeViewModel.hasAllAmount
-                          ? null
-                              : widget.exchangeViewModel.depositAvailableAmount,
-                      onSwitchButtonPressed: () {
-                        setState(() {
+                  builder: (_) {
+                    final hasAllAmount = !(widget.isReceiverCard ||
+                        widget.exchangeViewModel.isSendFromExternal ||
+                        !widget.exchangeViewModel.hasAllAmount);
+
+                    return FiatAmountBar(
+                        foregroundElementColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+                        textColor: Theme.of(context).colorScheme.onSurfaceVariant,
+                        allAmountColor: hasAllAmount ? null : Colors.transparent,
+                        allAmountTextColor:
+                            hasAllAmount ? null : Theme.of(context).colorScheme.onSurfaceVariant,
+                        fiatInputMode: _fiatInputMode,
+                        allAmount: !hasAllAmount
+                            ? widget.isReceiverCard
+                                ? null
+                                : widget.exchangeViewModel.balanceDisplay
+                            : widget.exchangeViewModel.depositAvailableAmount,
+                        onSwitchButtonPressed: () {
+                          setState(() {
                           _fiatInputMode = !_fiatInputMode;
                         });
                         if (_fiatInputMode) {
@@ -926,7 +947,8 @@ class SwapAmountBoxState extends State<SwapAmountBox> {
                           ? widget.exchangeViewModel.receiveCurrency.title
                           : widget.exchangeViewModel.depositCurrency.title,
 
-                      fiatCurrency: widget.exchangeViewModel.fiat.name),
+                      fiatCurrency: widget.exchangeViewModel.fiat.name);
+                  },
                 ),
                 Observer(
                   builder: (_) {
@@ -1065,6 +1087,13 @@ class SwapAmountBoxState extends State<SwapAmountBox> {
     final currencies = widget.isReceiverCard
         ? widget.exchangeViewModel.receiveCurrencies
         : widget.exchangeViewModel.depositCurrencies;
+    if(widget.exchangeViewModel.wallet.type == WalletType.bitcoin) {
+      currencies.sort((a, b) {
+        if(a == CryptoCurrency.btcln) return -1;
+        if(b == CryptoCurrency.btcln) return 1;
+        return 0;
+      });
+    }
 
     showPopUp<void>(
       context: context,
@@ -1168,7 +1197,9 @@ class SwapAmountBoxState extends State<SwapAmountBox> {
       if (newText == "0.00") {
         fiatAmountController.text = "";
       } else {
-        fiatAmountController.text = newText.replaceAll(RegExp(r'0+$'), '');
+        fiatAmountController.text = newText
+            .replaceAll(RegExp(r'(?<=\.\d*)0+$'), '')
+            .replaceAll(RegExp(r'\.$'), '');
       }
     }
   }

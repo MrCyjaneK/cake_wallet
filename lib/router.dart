@@ -3,9 +3,11 @@ import 'dart:io';
 import 'package:cake_wallet/anonpay/anonpay_invoice_info.dart';
 import 'package:cake_wallet/core/new_wallet_arguments.dart';
 import 'package:cake_wallet/new-ui/new_dashboard.dart';
+import 'package:cake_wallet/new-ui/pages/about_page.dart';
 import 'package:cake_wallet/new-ui/pages/coin_control_page.dart';
 import 'package:cake_wallet/new-ui/pages/addresses_page.dart';
 import 'package:cake_wallet/new-ui/pages/lightning_username_page.dart';
+import 'package:cake_wallet/new-ui/pages/send_page.dart';
 import 'package:cake_wallet/order/order.dart';
 import 'package:cake_wallet/core/new_wallet_type_arguments.dart';
 import 'package:cake_wallet/core/totp_request_details.dart';
@@ -437,9 +439,10 @@ Route<dynamic> createRoute(RouteSettings settings) {
       final coinTypeToSpendFrom = args?['coinTypeToSpendFrom'] as UnspentCoinType?;
 
       return handleRouteWithPlatformAwareness(
-        (context) => getIt.get<SendPage>(
-          param1: initialPaymentRequest,
-          param2: coinTypeToSpendFrom,
+        (context) => Material(
+          child: getIt.get<NewSendPage>(
+            param1: SendPageParams(initialPaymentRequest: initialPaymentRequest,unspentCoinType: coinTypeToSpendFrom ?? UnspentCoinType.any),
+          ),
         ),
         settings: settings,
       );
@@ -607,9 +610,10 @@ Route<dynamic> createRoute(RouteSettings settings) {
 
     case Routes.newNode:
       final args = settings.arguments as Map<String, dynamic>?;
+      final page = getIt.get<NodeCreateOrEditPage>(
+        param1: args?['editingNode'] as Node?, param2: args?['isSelected'] as bool?);
       return CupertinoPageRoute<void>(
-          builder: (_) => getIt.get<NodeCreateOrEditPage>(
-              param1: args?['editingNode'] as Node?, param2: args?['isSelected'] as bool?));
+          builder: (_) => page);
 
     case Routes.login:
       return CupertinoPageRoute<void>(
@@ -707,7 +711,8 @@ Route<dynamic> createRoute(RouteSettings settings) {
       return CupertinoPageRoute<void>(builder: (_) => getIt.get<ExchangeTemplatePage>());
 
     case Routes.rescan:
-      return MaterialPageRoute<void>(builder: (_) => getIt.get<RescanPage>());
+      final page = getIt.get<RescanPage>();
+      return MaterialPageRoute<void>(builder: (_) => page);
 
     case Routes.faq:
       return MaterialPageRoute<void>(builder: (_) => getIt.get<FaqPage>());
@@ -771,6 +776,10 @@ Route<dynamic> createRoute(RouteSettings settings) {
       return handleRouteWithPlatformAwareness(
         (context) => getIt.get<CakePayCardsPage>(),
       );
+
+    case Routes.aboutPage:
+      final page = getIt.get<AboutPage>();
+      return handleRouteWithPlatformAwareness((context) => page);
 
     case Routes.cakePayBuyCardPage:
       final args = settings.arguments as List;

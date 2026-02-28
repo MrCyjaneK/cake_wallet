@@ -375,11 +375,11 @@ abstract class DashboardViewModelBase with Store {
       return true;
     }
 
-    if (silentPaymentsScanningActive) {
+    if (wallet.type == WalletType.bitcoin && silentPaymentsScanningActive && hasSilentPayments) {
       return true;
     }
 
-    if (mwebEnabled) {
+    if (wallet.type == WalletType.litecoin && mwebEnabled && hasMweb) {
       return true;
     }
 
@@ -540,6 +540,24 @@ abstract class DashboardViewModelBase with Store {
   SyncStatus get status => wallet.syncStatus;
 
   @computed
+  bool get shouldShowMwebAd {
+    if(wallet.type != WalletType.litecoin) return false;
+
+    if(mwebEnabled) return false;
+
+    if(settingsStore.mwebAdDismissed) return false;
+
+    return true;
+  }
+
+  @action
+  void dismissMwebAd(bool enableMweb) {
+    if(enableMweb) setMwebEnabled();
+
+    settingsStore.mwebAdDismissed = true;
+  }
+
+  @computed
   String get syncStatusText {
     var statusText = '';
 
@@ -648,6 +666,10 @@ abstract class DashboardViewModelBase with Store {
 
   @observable
   WalletBase<Balance, TransactionHistoryBase<TransactionInfo>, TransactionInfo> wallet;
+
+  @computed
+  bool get hasLightning =>
+      wallet.type == WalletType.bitcoin && wallet.isSoftwareWallet && bitcoin!.useLightning(wallet);
 
   @computed
   bool get isTestnet => wallet.type == WalletType.bitcoin && bitcoin!.isTestnet(wallet);

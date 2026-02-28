@@ -800,6 +800,22 @@ class CWBitcoin extends Bitcoin {
   }
 
   @override
+  bool useLightning(Object wallet) {
+    final _wallet = wallet as ElectrumWallet;
+    if (_wallet is BitcoinWallet) return _wallet.useLightning;
+
+    return false;
+  }
+
+  @override
+  void updateUseLightning(Object wallet, bool value) {
+    final _wallet = wallet as ElectrumWallet;
+    if (_wallet is BitcoinWallet) {
+      _wallet.useLightning = value;
+    }
+  }
+
+  @override
   void resumePayjoinSessions(Object wallet) {
     final _wallet = wallet as ElectrumWallet;
     (_wallet.walletAddresses as BitcoinWalletAddresses).initPayjoin();
@@ -856,6 +872,16 @@ class CWBitcoin extends Bitcoin {
     }
     return (await electrumWallet.walletAddresses.lightningWallet!.getAddress())
         ?.replaceFirst("@cake.cash", "");
+  }
+
+  @override
+  Future<String?> getLightningInvoice(Object wallet, BigInt amount) async {
+    final electrumWallet = wallet as ElectrumWallet;
+
+    if (electrumWallet is BitcoinWallet && electrumWallet.lightningWallet != null) {
+      return electrumWallet.lightningWallet!.getBolt11Invoice(amount, "Send to CakeWallet");
+    }
+    return null;
   }
 
   @override

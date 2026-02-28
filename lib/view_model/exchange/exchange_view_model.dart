@@ -221,8 +221,21 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
   }
 
   Future<void> updateDepositAvailableAmount() async {
-    if(depositCurrency == CryptoCurrency.btcln) {
-      depositAvailableAmount = _appStore.amountParsingProxy.getDisplayCryptoString(wallet.balance[depositCurrency]!.fullAvailableBalance, depositCurrency);
+    if (depositCurrency == CryptoCurrency.btcln) {
+      final currency = depositCurrency;
+      Future.doWhile(() async {
+        await Future.delayed(const Duration(milliseconds: 400));
+        if (depositCurrency != currency) {
+          return false;
+        }
+        final balance = wallet.balance[depositCurrency];
+        if (balance != null) {
+          depositAvailableAmount = _appStore.amountParsingProxy
+              .getDisplayCryptoString(balance.fullAvailableBalance, depositCurrency);
+          return false;
+        }
+        return true;
+      });
     } else {
       final currency = depositCurrency;
       final amount = _appStore.amountParsingProxy.getDisplayCryptoString(
@@ -261,7 +274,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
   bool useSameWalletAddress(CryptoCurrency currency) =>
       currency == wallet.currency ||
-      currency == CryptoCurrency.btcln && wallet.currency == CryptoCurrency.btc ||
+      (currency == CryptoCurrency.btcln && wallet.currency == CryptoCurrency.btc && wallet.isSoftwareWallet) ||
       (currency.tag != null && currency.tag == wallet.currency.tag) ||
       currency.tag == wallet.currency.title;
 
@@ -343,6 +356,9 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
   String get depositAmount =>
       amountParsingProxy.getDisplayCryptoAmount(_depositAmount, depositCurrency);
 
+  @computed
+  String get depositAmountCanonical => _depositAmount;
+
   @observable
   String _receiveAmount;
 
@@ -382,6 +398,9 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
   Limits limits;
 
   @observable
+  bool tradeStarted = false;
+
+  @observable
   bool isSendFromExternal = false;
 
   @computed
@@ -403,9 +422,9 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
   @computed
   Future<List<WalletInfo>> get receiveWallets async {
     WalletType? type;
-    type = cryptoCurrencyToWalletType(receiveCurrency);
+    type = cryptoCurrencyOrTokenToWalletType(receiveCurrency);
     if (type == null) {
-      type = cryptoCurrencyToWalletType(CryptoCurrency.fromString(receiveCurrency.tag ?? ""));
+      type = cryptoCurrencyOrTokenToWalletType(CryptoCurrency.fromString(receiveCurrency.tag ?? ""));
     }
 
     return await WalletInfo.selectList("type = ?", [type!.index]);
@@ -424,12 +443,18 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
   @computed
   Future<List<WalletInfo>> get depositWallets async {
     WalletType? type;
-    type = cryptoCurrencyToWalletType(depositCurrency);
+    type = cryptoCurrencyOrTokenToWalletType(depositCurrency);
     if (type == null) {
-      type = cryptoCurrencyToWalletType(CryptoCurrency.fromString(depositCurrency.tag ?? ""));
+      try {
+        type = cryptoCurrencyOrTokenToWalletType(CryptoCurrency.fromString(depositCurrency.tag ?? ""));
+      } catch (_) {}
     }
 
-    return await WalletInfo.selectList("type = ?", [type!.index]);
+    if (type != null) {
+      return await WalletInfo.selectList("type = ?", [type.index]);
+    }
+
+    return await WalletInfo.getAll();
   }
 
   @action
@@ -447,6 +472,13 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
   @computed
   bool get shouldDisplayTOTP2FAForExchangesToExternalWallet =>
       _settingsStore.shouldRequireTOTP2FAForExchangesToExternalWallets;
+
+  @computed
+  String? get balanceDisplay {
+    final bal = wallet.balance[depositCurrency]?.fullAvailableBalance;
+    if(bal == null) return null;
+    return amountParsingProxy.getDisplayCryptoString(bal, depositCurrency);
+  }
 
   //* Still open to further optimize these checks
   //* It works but can be made better
@@ -488,8 +520,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
         WalletType.bitcoinCash,
         WalletType.dogecoin,
       ].contains(wallet.type) &&
-      (depositCurrency == wallet.currency ||
-          depositCurrency == CryptoCurrency.btcln && wallet.currency == CryptoCurrency.btc);
+      (depositCurrency == wallet.currency);
 
   bool get isMoneroWallet => wallet.type == WalletType.monero;
 
@@ -940,6 +971,22 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
             title: S.current.trade_not_created,
             error: S.current.amount_is_below_minimum_limit(limits.min!.toString()));
         return;
+      }
+    }
+
+    if (depositCurrency == CryptoCurrency.btcln &&
+        depositAddress == wallet.walletAddresses.addressForExchange) {
+      final invoice = await bitcoin!.getLightningInvoice(wallet, BigInt.zero);
+      if (invoice != null) {
+        depositAddress = invoice;
+      }
+    }
+
+    if (receiveCurrency == CryptoCurrency.btcln &&
+        receiveAddress == wallet.walletAddresses.addressForExchange) {
+      final invoice = await bitcoin!.getLightningInvoice(wallet, BigInt.zero);
+      if (invoice != null) {
+        receiveAddress = invoice;
       }
     }
 
@@ -1462,12 +1509,11 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
   @action
   Future<void> _injectUserEthTokensIntoCurrencyLists() async {
-    final userTokens = await TokenUtilities.loadAllUniqueEvmTokens();
-
+    final tokens = await TokenUtilities.loadEvmTokensForSwap();
     final toAddReceive = <CryptoCurrency>[];
     final toAddDeposit = <CryptoCurrency>[];
 
-    for (final token in userTokens) {
+    for (final token in tokens) {
       if (!_listContainsToken(receiveCurrencies, token)) toAddReceive.add(token);
       if (!_listContainsToken(depositCurrencies, token)) toAddDeposit.add(token);
     }
@@ -1500,12 +1546,11 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
   @action
   Future<void> _injectUserSplTokensIntoCurrencyLists() async {
-    final userTokens = await TokenUtilities.loadAllUniqueSolTokens();
-
+    final tokens = await TokenUtilities.loadSolTokensForSwap();
     final toAddReceive = <CryptoCurrency>[];
     final toAddDeposit = <CryptoCurrency>[];
 
-    for (final token in userTokens) {
+    for (final token in tokens) {
       if (!_listContainsSplToken(receiveCurrencies, token)) toAddReceive.add(token);
       if (!_listContainsSplToken(depositCurrencies, token)) toAddDeposit.add(token);
     }
@@ -1528,12 +1573,11 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
   @action
   Future<void> _injectUserTronTokensIntoCurrencyLists() async {
-    final userTokens = await TokenUtilities.loadAllUniqueTronTokens();
-
+    final tokens = await TokenUtilities.loadTronTokensForSwap();
     final toAddReceive = <CryptoCurrency>[];
     final toAddDeposit = <CryptoCurrency>[];
 
-    for (final token in userTokens) {
+    for (final token in tokens) {
       if (!_listContainsTronToken(receiveCurrencies, token)) toAddReceive.add(token);
       if (!_listContainsTronToken(depositCurrencies, token)) toAddDeposit.add(token);
     }

@@ -21,6 +21,7 @@ import 'package:cake_wallet/wownero/wownero.dart';
 import 'package:cake_wallet/zano/zano.dart';
 import 'package:cake_wallet/zcash/zcash.dart';
 import 'package:cw_core/balance.dart';
+import 'package:cw_core/crypto_amount_format.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:cw_core/currency_for_wallet_type.dart';
 import 'package:cw_core/format_fixed.dart';
@@ -47,6 +48,7 @@ abstract class OutputBase with Store {
         fiatAmount = '',
         address = '',
         note = '',
+        memo = "",
         extractedAddress = '',
         estimatedFee = '0.0',
         parsedAddress = ParsedAddress(addresses: []) {
@@ -68,6 +70,9 @@ abstract class OutputBase with Store {
   @observable
   String cryptoAmount;
 
+  @observable
+  String? displayName;
+
   @computed
   String get displayCryptoAmount =>
       _appStore.amountParsingProxy.getDisplayCryptoAmount(cryptoAmount, cryptoCurrencyHandler());
@@ -80,6 +85,9 @@ abstract class OutputBase with Store {
 
   @observable
   String note;
+  
+  @observable
+  String memo;
 
   @observable
   bool sendAll;
@@ -90,24 +98,18 @@ abstract class OutputBase with Store {
   @observable
   String extractedAddress;
 
-  String? memo;
 
   @computed
   bool get isParsedAddress =>
       parsedAddress.parseFrom != ParseFrom.notParsed && parsedAddress.name.isNotEmpty;
 
-  String roundedCryptoAmount(int digits) {
-    if (displayCryptoAmount.split(".").last.length <= digits) {
-      return displayCryptoAmount;
-    }
-    return double.parse(displayCryptoAmount).toStringAsPrecision(digits);
-  }
+  String roundedCryptoAmount(int digits) => displayCryptoAmount.withMaxDecimals(digits);
 
   String roundedFiatAmount(int digits) {
     if (fiatAmount.split(".").last.length <= digits) {
       return fiatAmount;
     }
-    return double.parse(fiatAmount).toStringAsPrecision(digits);
+    return double.parse(fiatAmount.replaceAll(",", "")).toStringAsPrecision(digits);
   }
 
   @observable
@@ -314,11 +316,12 @@ abstract class OutputBase with Store {
     fiatAmount = '';
     address = '';
     note = '';
-    memo = null;
+    memo = "";
     resetParsedAddress();
   }
 
   void resetParsedAddress() {
+    displayName = null;
     extractedAddress = '';
     parsedAddress = ParsedAddress(addresses: []);
   }
@@ -390,6 +393,9 @@ abstract class OutputBase with Store {
     final domain = address;
     final currency = cryptoCurrencyHandler();
     parsedAddress = await getIt.get<AddressResolver>().resolve(context, domain, currency);
+    if(parsedAddress.name.isNotEmpty) {
+      displayName = parsedAddress.name;
+    }
     extractedAddress = await extractAddressFromParsed(context, parsedAddress);
     note = parsedAddress.description;
   }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
@@ -20,6 +21,8 @@ class LightningWallet {
   final Network network;
   late BreezSdk sdk;
 
+  static int MAX_RETRIES = 10;
+
   LightningWallet({
     required this.mnemonic,
     this.passphrase,
@@ -28,6 +31,20 @@ class LightningWallet {
     required this.lnurlDomain,
     this.network = Network.mainnet,
   });
+
+  StreamSubscription<SdkEvent>? _eventSubscription;
+  Stream<SdkEvent>? _eventStream;
+
+  StreamSubscription<LogEntry>? _logSubscription;
+  Stream<LogEntry>? _logStream;
+
+  void _subscribeToLogStream(File logFile) {
+    _logSubscription = _logStream?.listen((logEntry) {
+      logFile.writeAsString("[${logEntry.level}] ${logEntry.line}\n", mode: FileMode.append);
+    }, onError: (e) {
+      logFile.writeAsString("[ERROR] $e\n", mode: FileMode.append);
+    });
+  }
 
   Future<bool> init(String appPath) async {
     try {
@@ -49,12 +66,21 @@ class LightningWallet {
       final connectRequest = ConnectRequest(
         config: config,
         seed: seed,
-        storageDir: "$appPath/",
+        storageDir: "$appPath/.breez/",
       );
 
       sdk = await connect(request: connectRequest);
 
       _eventStream ??= sdk.addEventListener().asBroadcastStream();
+      _logStream ??= initLogging().asBroadcastStream();
+
+      try {
+        final logFile = File("$appPath/lightning.log")
+          ..createSync();
+        _subscribeToLogStream(logFile);
+      } catch (e) {
+        printV(e);
+      }
 
       return true;
     } catch (e) {
@@ -66,11 +92,20 @@ class LightningWallet {
   Future<void> close() async {
     _eventSubscription?.cancel();
     await sdk.disconnect();
+    _logSubscription?.cancel();
   }
 
-  Future<String?> getAddress() async => (await sdk.getLightningAddress())?.lightningAddress;
+  Future<String?> getAddress() async {
+    var retries = 0;
+    while (retries < MAX_RETRIES) {
+      final address = (await sdk.getLightningAddress())?.lightningAddress;
 
-  Future<String?> getLNURL() async => (await sdk.getLightningAddress())?.lnurl;
+      if (address != null) return address;
+      retries++;
+      await Future.delayed(Duration(milliseconds: 500));
+    }
+    return null;
+  }
 
   Future<String> getDepositAddress() async => (await sdk.receivePayment(
           request: ReceivePaymentRequest(paymentMethod: ReceivePaymentMethod.bitcoinAddress())))
@@ -212,10 +247,12 @@ class LightningWallet {
     throw UnimplementedError();
   }
 
-  Future<Map<String, ElectrumTransactionInfo>> getTransactionHistory() async {
+  Future<Map<String, ElectrumTransactionInfo>> getTransactionHistory({DateTime? fromDate}) async {
     final request = ListPaymentsRequest(
       typeFilter: [PaymentType.send, PaymentType.receive],
       // statusFilter: [PaymentStatus.completed],
+      fromTimestamp:
+          fromDate != null ? BigInt.from((fromDate.millisecondsSinceEpoch / 1000).round()) : null,
       assetFilter: AssetFilter.bitcoin(),
       offset: 0,
       limit: 50,
@@ -294,9 +331,6 @@ class LightningWallet {
     return response.txHex;
   }
 
-  StreamSubscription<SdkEvent>? _eventSubscription;
-  Stream<SdkEvent>? _eventStream;
-
   void setEventListener(
       {required Function(ElectrumTransactionInfo) onTransactionEvent, required Function onBalanceChangedEvent}) {
     _eventSubscription = _eventStream?.listen((sdkEvent) {
@@ -345,6 +379,7 @@ extension _ConfigCopyWith on Config {
     bool? useDefaultExternalInputParsers,
     bool? privateEnabledDefault,
     OptimizationConfig? optimizationConfig,
+    int? maxConcurrentClaims,
   }) =>
       Config(
         lnurlDomain: lnurlDomain ?? this.lnurlDomain,
@@ -357,5 +392,6 @@ extension _ConfigCopyWith on Config {
             useDefaultExternalInputParsers ?? this.useDefaultExternalInputParsers,
         privateEnabledDefault: privateEnabledDefault ?? this.privateEnabledDefault,
         optimizationConfig: optimizationConfig ?? this.optimizationConfig,
+        maxConcurrentClaims: maxConcurrentClaims ?? this.maxConcurrentClaims,
       );
 }

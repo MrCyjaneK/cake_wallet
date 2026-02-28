@@ -63,12 +63,14 @@ abstract class BitcoinWalletBase extends ElectrumWallet with Store {
     BasedUtxoNetwork? networkParam,
     List<BitcoinAddressRecord>? initialAddresses,
     ElectrumBalance? initialBalance,
+    ElectrumBalance? initialLightningBalance,
     Map<String, int>? initialRegularAddressIndex,
     Map<String, int>? initialChangeAddressIndex,
     String? passphrase,
     List<BitcoinSilentPaymentAddressRecord>? initialSilentAddresses,
     int initialSilentAddressIndex = 0,
     bool? alwaysScan,
+    bool? useLightning,
   }) : super(
           mnemonic: mnemonic,
           passphrase: passphrase,
@@ -89,6 +91,7 @@ abstract class BitcoinWalletBase extends ElectrumWallet with Store {
           currency:
               networkParam == BitcoinNetwork.testnet ? CryptoCurrency.tbtc : CryptoCurrency.btc,
           alwaysScan: alwaysScan,
+          useLightning: useLightning ?? true,
         ) {
     // in a standard BIP44 wallet, mainHd derivation path = m/84'/0'/0'/0 (account 0, index unspecified here)
     // the sideHd derivation path = m/84'/0'/0'/1 (account 1, index unspecified here)
@@ -96,7 +99,7 @@ abstract class BitcoinWalletBase extends ElectrumWallet with Store {
     // String sideDerivationPath = derivationPath.substring(0, derivationPath.length - 1) + "1";
     // final hd = bitcoin.HDWallet.fromSeed(seedBytes, network: networkType);
 
-    if (mnemonic != null) {
+    if (mnemonic != null && this.useLightning) {
       try {
         lightningWallet = LightningWallet(
           mnemonic: mnemonic,
@@ -136,6 +139,26 @@ abstract class BitcoinWalletBase extends ElectrumWallet with Store {
     autorun((_) {
       this.walletAddresses.isEnabledAutoGenerateSubaddress = this.isEnabledAutoGenerateSubaddress;
     });
+    
+    reaction((_) => this.useLightning, (bool useLightning) {
+      if (useLightning) {
+        if (mnemonic != null) {
+          lightningWallet = LightningWallet(
+            mnemonic: mnemonic,
+            passphrase: passphrase,
+            seedBytes: seedBytes,
+            apiKey: secrets.breezApiKey,
+            lnurlDomain: "cake.cash",
+          );
+        }
+      } else {
+        lightningWallet = null;
+      }
+    });
+
+    if (initialLightningBalance != null) {
+      balance[CryptoCurrency.btcln] = initialLightningBalance;
+    }
   }
 
   @override
@@ -193,6 +216,7 @@ abstract class BitcoinWalletBase extends ElectrumWallet with Store {
       addressPageType: addressPageType,
       networkParam: network,
       payjoinBox: payjoinBox,
+      useLightning: true,
     );
   }
 
@@ -288,6 +312,7 @@ abstract class BitcoinWalletBase extends ElectrumWallet with Store {
         initialSilentAddresses: snp?.silentAddresses,
         initialSilentAddressIndex: snp?.silentAddressIndex ?? 0,
         initialBalance: snp?.balance,
+        initialLightningBalance: snp?.lightningBalance,
         encryptionFileUtils: encryptionFileUtils,
         seedBytes: seedBytes,
         initialRegularAddressIndex: snp?.regularAddressIndex,
@@ -295,7 +320,9 @@ abstract class BitcoinWalletBase extends ElectrumWallet with Store {
         addressPageType: snp?.addressPageType,
         networkParam: network,
         alwaysScan: snp?.alwaysScan,
-        payjoinBox: payjoinBox);
+        useLightning: snp?.useLightning,
+        payjoinBox: payjoinBox,
+    );
   }
 
   @override
@@ -346,7 +373,11 @@ abstract class BitcoinWalletBase extends ElectrumWallet with Store {
   @override
   Future<Map<String, ElectrumTransactionInfo>> fetchTransactions() async {
     if (lightningWallet != null) {
-      lightningWallet!.getTransactionHistory().then((lnHistory) async {
+      final existingTx = transactionHistory.transactions.values
+          .where((e) => (e.additionalInfo["isLightning"] as bool?) == true)
+          .lastOrNull;
+
+      lightningWallet!.getTransactionHistory(fromDate: existingTx?.date).then((lnHistory) async {
         transactionHistory.addMany(lnHistory);
         await transactionHistory.save();
       }).onError((_, __) {});
@@ -355,7 +386,7 @@ abstract class BitcoinWalletBase extends ElectrumWallet with Store {
     return super.fetchTransactions();
   }
 
-  late final LightningWallet? lightningWallet;
+  late LightningWallet? lightningWallet;
 
   late final PayjoinManager payjoinManager;
 
@@ -439,8 +470,9 @@ abstract class BitcoinWalletBase extends ElectrumWallet with Store {
   @override
   Future<PendingTransaction> createTransaction(Object credentials) async {
     credentials = credentials as BitcoinTransactionCredentials;
+    final lnAddr = credentials.outputs.first.isParsedAddress ? credentials.outputs.first.extractedAddress! : credentials.outputs.first.address;
 
-    final isLNCompatible = await lightningWallet?.isCompatible(credentials.outputs.first.address);
+    final isLNCompatible = await lightningWallet?.isCompatible(lnAddr);
     if ((credentials.coinTypeToSpendFrom == UnspentCoinType.lightning && lightningWallet != null) ||
         isLNCompatible == true) {
 
@@ -455,7 +487,7 @@ abstract class BitcoinWalletBase extends ElectrumWallet with Store {
             8);
       }
 
-      return lightningWallet!.createTransaction(credentials.outputs.first.address,
+      return lightningWallet!.createTransaction(lnAddr,
           amount > BigInt.zero ? amount : null, credentials.priority);
     }
 

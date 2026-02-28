@@ -126,6 +126,10 @@ abstract class ZcashWalletAddressesBase extends WalletAddresses with Store {
   String get addressForExchange => transparentAddressRotated ?? transparentAddress;
 
   @override
+  @computed
+  String get addressForBuy => transparentAddressRotated ?? transparentAddress;
+
+  @override
   bool containsAddress(final String address) {
     return this.address == address || addressesMap.values.contains(address);
   }
@@ -239,5 +243,5 @@ abstract class ZcashWalletAddressesBase extends WalletAddresses with Store {
   }
 
   @override
-  PaymentURI getPaymentUri(String amount) => ZcashURI(amount: amount, address: address);
+  PaymentURI getPaymentUri(final String amount) => ZcashURI(amount: amount, address: address);
 }

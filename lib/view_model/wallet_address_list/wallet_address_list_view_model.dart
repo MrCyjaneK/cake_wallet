@@ -83,6 +83,12 @@ abstract class WalletAddressListViewModelBase extends WalletChangeListenerViewMo
       _appStore.amountParsingProxy.getCryptoSymbol(tokenCurrency ?? wallet.currency);
 
   void setTokenCurrency(Currency curr) {
+    if(curr == wallet.currency || curr == CryptoCurrency.btcln) {
+      tokenCurrency = null;
+      selectedCurrency = wallet.currency;
+      return;
+    }
+
     tokenCurrency = curr as CryptoCurrency;
     if (selectedCurrency is CryptoCurrency) {
       selectedCurrency = curr;
@@ -135,6 +141,10 @@ abstract class WalletAddressListViewModelBase extends WalletChangeListenerViewMo
     if (_amount.isEmpty) return "";
     var cryptoCurrency = tokenCurrency ?? wallet.currency;
     if (cryptoCurrency == CryptoCurrency.btcln) cryptoCurrency = CryptoCurrency.btc;
+    if(selectedCurrency is FiatCurrency && _fiatRate != null) {
+      return selectedCurrencyFiatAmount;
+    }
+
     if (!fiatConversionStore.prices.containsKey(cryptoCurrency)) return "";
     return (double.parse(_amount) * fiatConversionStore.prices[cryptoCurrency]!).toStringAsFixed(2);
   }
@@ -151,6 +161,10 @@ abstract class WalletAddressListViewModelBase extends WalletChangeListenerViewMo
     await wallet.walletInfo.save();
   }
 
+  // payjoinEndpoint getter is broken, but uri works
+  bool get hasPayjoin =>
+      wallet.type == WalletType.bitcoin && !isLightning && !isSilentPayments && uri.toString().contains("payjo.in");
+
   @computed
   FiatCurrency get fiatCurrency => _appStore.settingsStore.fiatCurrency;
 
@@ -166,10 +180,7 @@ abstract class WalletAddressListViewModelBase extends WalletChangeListenerViewMo
       wallet.type == WalletType.bitcoin ? bitcoin!.getPayjoinEndpoint(wallet) : "";
 
   @computed
-  bool get isPayjoinUnavailable =>
-      wallet.type == WalletType.bitcoin &&
-      _appStore.settingsStore.usePayjoin &&
-      payjoinEndpoint.isEmpty;
+  bool get isPayjoinUnavailable => payjoinEndpoint.isEmpty;
 
   @observable
   PaymentURI? _lnPaymentRequest;

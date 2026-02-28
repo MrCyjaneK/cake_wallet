@@ -9,12 +9,18 @@ class ListItemRegularRow extends ListItem {
     this.trailingText,
     this.iconPath,
     this.onTap,
-    this.showArrow = true
+    this.trailingIconPath,
+    this.showArrow = true,
+    this.foregroundColor,
+    this.trailingIconSize
   });
 
   final String? subtitle;
   final String? trailingText;
   final String? iconPath;
+  final String? trailingIconPath;
   final VoidCallback? onTap;
   final bool showArrow;
+  final Color? foregroundColor;
+  final double? trailingIconSize;
 }

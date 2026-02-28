@@ -14,7 +14,8 @@ class ListItemRegularRowWidget extends StatelessWidget {
     this.hasImage,
     this.isFirstInSection = false,
     this.isLastInSection = false,
-    this.showArrow = true
+    this.showArrow = true,
+    this.trailingIconPath, this.foregroundColor, this.trailingIconSize
   });
 
   final String keyValue;
@@ -27,6 +28,9 @@ class ListItemRegularRowWidget extends StatelessWidget {
   final bool isFirstInSection;
   final bool isLastInSection;
   final bool showArrow;
+  final String? trailingIconPath;
+  final Color? foregroundColor;
+  final double? trailingIconSize;
 
   @override
   Widget build(BuildContext context) {
@@ -41,36 +45,40 @@ class ListItemRegularRowWidget extends StatelessWidget {
           return Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  if(iconPath != null)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 12.0),
-                      child: iconPath!.split(".").last.toLowerCase() == "svg"
-                          ? SvgPicture.asset(
-                              iconPath!,
-                              width: 24,
-                              height: 24,
-                            )
-                          : Image.asset(
-                              iconPath!,
-                              width: 24,
-                              height: 24,
+              Expanded(
+                child: Row(
+                  children: [
+                    if(iconPath != null)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 12.0),
+                        child: iconPath!.split(".").last.toLowerCase() == "svg"
+                            ? SvgPicture.asset(
+                                iconPath!,
+                                width: 24,
+                                height: 24,
+                              )
+                            : Image.asset(
+                                iconPath!,
+                                width: 24,
+                                height: 24,
+                              ),
+                      ),
+                    Flexible(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(label, style: foregroundColor == null ? textStyle : textStyle.copyWith(color: foregroundColor)),
+                          if (subtitle != null)
+                            Text(
+                              subtitle!,
+                              style: labelStyle.copyWith(fontSize: 12),
                             ),
+                        ],
+                      ),
                     ),
-                  Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(label, style: textStyle),
-                      if (subtitle != null)
-                        Text(
-                          subtitle!,
-                          style: labelStyle.copyWith(fontSize: 12),
-                        ),
-                    ],
-                  ),
-                ],
+                  ],
+                ),
               ),
 
               Row(
@@ -83,7 +91,14 @@ class ListItemRegularRowWidget extends StatelessWidget {
                         style: labelStyle,
                       ),
                     ),
-                  if(showArrow)
+                  if(trailingIconPath != null)
+                    SvgPicture.asset(
+                      trailingIconPath!,
+                      height: trailingIconSize ?? 18,
+                      width:trailingIconSize ?? 18,
+                      colorFilter: ColorFilter.mode(foregroundColor ?? Theme.of(context).colorScheme.onSurfaceVariant,BlendMode.srcIn),
+                    )
+                  else if(showArrow)
                   SvgPicture.asset(
                     "assets/new-ui/arrow_forward.svg",
                     height: 14,

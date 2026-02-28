@@ -133,4 +133,19 @@ abstract class BitcoinWalletAddressesBase extends ElectrumWalletAddresses with S
     }
     return getPaymentUri(amount);
   }
+
+  @override
+  bool containsAddress(String address) => super.containsAddress(address) || address == lightningAddress;
+
+  @override
+  String get addressForBuy {
+    try {
+      return super
+          .allAddresses
+          .firstWhere((e) => e.type == SegwitAddresType.p2wpkh && !e.isHidden && !e.isUsed)
+          .address;
+    } catch (_) {
+      return super.addressForBuy;
+    }
+  }
 }

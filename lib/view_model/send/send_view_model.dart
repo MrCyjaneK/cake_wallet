@@ -429,7 +429,11 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
   final FiatConversionStore _fiatConversationStore;
   final Box<TransactionDescription> transactionDescriptionBox;
 
+  @computed
   AmountParsingProxy get amountParsingProxy => _appStore.amountParsingProxy;
+
+  @computed
+  String get languageCode => _appStore.settingsStore.languageCode;
 
   @observable
   bool hasMultipleTokens;
@@ -1101,6 +1105,17 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     }
   }
 
+  @computed
+  bool get hasMemos => [WalletType.zcash].contains(wallet.type);
+
+  final Map<WalletType, int> _maxMemoLengths = {
+    WalletType.zcash: 512,
+  };
+
+  @computed
+  int get maxMemoLength => _maxMemoLengths[wallet.type] ?? 9999999;
+
+
   ContactRecord? newContactAddress() {
     final Set<String> contactAddresses =
         Set.from(contactListViewModel.contacts.map((contact) => contact.address))
@@ -1271,6 +1286,9 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     if (error is TransactionNoDustException) {
       return S.current.tx_no_dust_exception;
     }
+    if (error is TransactionCommitFailedBIP68Final) {
+      return S.current.trying_to_spend_locked_funds;
+    }
     if (error is TransactionCommitFailed) {
       if (error.errorMessage != null && error.errorMessage!.contains("no peers replied")) {
         return S.current.tx_commit_failed_no_peers;
@@ -1302,7 +1320,25 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
       return S.current.tx_invalid_input;
     }
 
+    if(wallet.type == WalletType.bitcoin) {
+      final lnError = getLightningErrorMessage(error);
+      if(lnError != null) return lnError;
+    }
+
     return errorMessage;
+  }
+
+  String? getLightningErrorMessage(Object error) {
+    // TODO add more patterns
+    Map<String, String> errorPatterns = {
+      "insufficient funds": S.current.insufficient_funds_for_tx
+    };
+
+    for(final pattern in errorPatterns.keys) {
+      if(error.toString().contains(pattern)) return errorPatterns[pattern]!;
+    }
+
+    return null;
   }
 
   bool _hasTaprootInput(PendingTransaction? pendingTransaction) {
