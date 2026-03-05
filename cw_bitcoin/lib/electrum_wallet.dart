@@ -2181,7 +2181,8 @@ abstract class ElectrumWalletBase
       final String inputTransactionHex;
 
       if (verboseTransaction.isEmpty) {
-        inputTransactionHex = await electrumClient.getTransactionHex(hash: hash);
+        // IMPORTANT: fetch the input transaction by the input txid (vin.txId), not the original tx hash.
+        inputTransactionHex = await electrumClient.getTransactionHex(hash: vin.txId);
       } else {
         inputTransactionHex = verboseTransaction['hex'] as String;
       }
@@ -2266,46 +2267,50 @@ abstract class ElectrumWalletBase
   }
 
   Future<void> fetchTransactionsForAddressType(
-    Map<String, ElectrumTransactionInfo> historiesWithDetails,
-    BitcoinAddressType type,
-  ) async {
-    final addressesByType = walletAddresses.allAddresses.where((addr) => addr.type == type);
-    final hiddenAddresses = addressesByType.where((addr) => addr.isHidden == true);
-    final receiveAddresses = addressesByType.where((addr) => addr.isHidden == false);
+      Map<String, ElectrumTransactionInfo> historiesWithDetails, BitcoinAddressType type,
+      {int addressChunkSize = 250}) async {
+    final addressesByType =
+        walletAddresses.allAddresses.where((addr) => addr.type == type).toList();
+    final hiddenAddresses = addressesByType.where((addr) => addr.isHidden).toList();
+    final receiveAddresses = addressesByType.where((addr) => !addr.isHidden).toList();
     walletAddresses.hiddenAddresses.addAll(hiddenAddresses.map((e) => e.address));
     await walletAddresses.saveAddressesInBox();
-    await Future.wait(addressesByType.map((addressRecord) async {
 
-      final history = this is BitcoinWallet ?  await _fetchBatchAddressHistory(addressRecord, await getCurrentChainTip())
-          : await _fetchAddressHistory(addressRecord, await getCurrentChainTip());
+    final tip = await getCurrentChainTip();
 
-      if (history.isNotEmpty) {
-        addressRecord.txCount = history.length;
-        historiesWithDetails.addAll(history);
+    for (var i = 0; i < addressesByType.length; i += addressChunkSize) {
+      final end = (i + addressChunkSize < addressesByType.length)
+          ? i + addressChunkSize
+          : addressesByType.length;
 
+      final chunk = addressesByType.sublist(i, end);
+
+      final chunkHistory = await _fetchBatchAddressHistory(chunk, tip);
+
+      if (chunkHistory.isNotEmpty) {
+        historiesWithDetails.addAll(chunkHistory);
+      }
+
+      for (final addressRecord in chunk) {
         final matchedAddresses = addressRecord.isHidden ? hiddenAddresses : receiveAddresses;
+
         final isUsedAddressUnderGap = matchedAddresses.toList().indexOf(addressRecord) >=
             matchedAddresses.length -
                 (addressRecord.isHidden
                     ? ElectrumWalletAddressesBase.defaultChangeAddressesCount
                     : ElectrumWalletAddressesBase.defaultReceiveAddressesCount);
 
-        if (isUsedAddressUnderGap) {
+        if (isUsedAddressUnderGap && (addressRecord.isUsed == true)) {
           final prevLength = walletAddresses.allAddresses.length;
 
-          // Discover new addresses for the same address type until the gap limit is respected
+          //Can be implemented more efficiently by batching the discoverAddresses calls as well.
           await walletAddresses.discoverAddresses(
             matchedAddresses.toList(),
             addressRecord.isHidden,
             (address) async {
               await subscribeForUpdates();
-              if (this is BitcoinWallet) {
-              return _fetchBatchAddressHistory(address, await getCurrentChainTip())
-                  .then((history) => history.isNotEmpty ? address.address : null);
-              } else {
-                return _fetchAddressHistory(address, await getCurrentChainTip())
-                    .then((history) => history.isNotEmpty ? address.address : null);
-              }
+              return _fetchBatchAddressHistory([address], tip)
+                  .then((h) => h.isNotEmpty ? address.address : null);
             },
             type: type,
           );
@@ -2313,11 +2318,16 @@ abstract class ElectrumWalletBase
           final newLength = walletAddresses.allAddresses.length;
 
           if (newLength > prevLength) {
-            await fetchTransactionsForAddressType(historiesWithDetails, type);
+            await fetchTransactionsForAddressType(
+              historiesWithDetails,
+              type,
+              addressChunkSize: addressChunkSize,
+            );
+            return;
           }
         }
       }
-    }));
+    }
   }
 
   Future<Map<String, ElectrumTransactionInfo>> _fetchAddressHistory(
@@ -2329,16 +2339,15 @@ abstract class ElectrumWalletBase
 
       final history = await electrumClient.getHistory(addressRecord.getScriptHash(network));
 
-
       if (history.isNotEmpty) {
         addressRecord.setAsUsed();
         walletAddresses.clearLockIfMatches(addressRecord.type, addressRecord.address);
 
-        if(this is BitcoinWallet) {
+        if (this is BitcoinWallet) {
           //removes transactions no longer returned by the api, presumed replaced/invalid.
           transactionHistory.transactions.removeWhere(
-                (hash, tx) =>
-            tx.outputAddresses != null &&
+            (hash, tx) =>
+                tx.outputAddresses != null &&
                 tx.outputAddresses!.contains(addressRecord.address) &&
                 !history.any((newTransaction) => newTransaction['tx_hash'] == hash),
           );
@@ -2403,237 +2412,556 @@ abstract class ElectrumWalletBase
   }
 
   Future<Map<String, ElectrumTransactionInfo>> _fetchBatchAddressHistory(
-      BitcoinAddressRecord addressRecord, int? currentHeight) async {
-    String txid = "";
+    List<BitcoinAddressRecord> addressRecords,
+    int? currentHeight, {
+    int historyChunkSize = 250,
+    int txChunkSize = 50,
+    int inputTxChunkSize = 50,
+  }) async {
+    String lastTxId = '';
+    bool didUpdateHistory = false;
 
     try {
       final Map<String, ElectrumTransactionInfo> historiesWithDetails = {};
+      if (addressRecords.isEmpty) return historiesWithDetails;
 
-      final history = await electrumClient.getHistory(addressRecord.getScriptHash(network));
+      // Batch get_history for all script hashes
+      final scriptHashes =
+          addressRecords.map((a) => a.getScriptHash(network)).toList(growable: false);
 
+      final historyByScriptHash = <String, List<Map<String, dynamic>>>{};
 
-      if (history.isNotEmpty) {
+      for (var i = 0; i < scriptHashes.length; i += historyChunkSize) {
+        final end = (i + historyChunkSize < scriptHashes.length)
+            ? i + historyChunkSize
+            : scriptHashes.length;
+        final chunk = scriptHashes.sublist(i, end);
+
+        final chunkMap = await electrumClient.getBatchHistory(chunk);
+        historyByScriptHash.addAll(chunkMap);
+      }
+
+      // Map scriptHash -> addressRecord
+      final byScriptHash = <String, BitcoinAddressRecord>{};
+      for (final a in addressRecords) {
+        byScriptHash[a.getScriptHash(network)] = a;
+      }
+
+      // Split into already-known txs vs missing txs
+      final missingHistoryItems = <Map<String, dynamic>>[];
+
+      for (final entry in historyByScriptHash.entries) {
+        final sh = entry.key;
+        final addressRecord = byScriptHash[sh];
+        if (addressRecord == null) continue;
+
+        final history = entry.value;
+        if (history.isEmpty) continue;
+
         addressRecord.setAsUsed();
         walletAddresses.clearLockIfMatches(addressRecord.type, addressRecord.address);
 
+        // Remove txs no longer returned by server (BTC only)
         if (this is BitcoinWallet) {
-          //removes transactions no longer returned by the api, presumed replaced/invalid.
-          transactionHistory.transactions.removeWhere(
-                (hash, tx) =>
-            tx.outputAddresses != null &&
+          final beforeLen = transactionHistory.transactions.length;
+          transactionHistory.transactions.removeWhere((hash, tx) {
+            return tx.outputAddresses != null &&
                 tx.outputAddresses!.contains(addressRecord.address) &&
-                !history.any((newTransaction) => newTransaction['tx_hash'] == hash),
-          );
+                !history.any((h) => h['tx_hash'] == hash);
+          });
+          if (transactionHistory.transactions.length != beforeLen) {
+            didUpdateHistory = true;
+          }
         }
 
-        final List<Map<String, dynamic>> missingHistory = [];
+        for (final item in history) {
+          final txid = item['tx_hash'] as String?;
+          final height = item['height'] as int? ?? 0;
+          if (txid == null || txid.isEmpty) continue;
 
-        for (final transaction in history) {
-          txid = transaction['tx_hash'] as String;
-          final height = transaction['height'] as int;
+          lastTxId = txid;
+
           final storedTx = transactionHistory.transactions[txid];
-
-          // If we already have this tx in the history, just update its confirmations and pending status
           if (storedTx != null) {
             if (height > 0) {
+              final oldHeight = storedTx.height;
+              final oldConfs = storedTx.confirmations;
+              final oldPending = storedTx.isPending;
+
               storedTx.height = height;
-              // the tx's block itself is the first confirmation so add 1
+
               if ((currentHeight ?? 0) > 0) {
                 storedTx.confirmations = currentHeight! - height + 1;
               }
+
               storedTx.isPending = storedTx.confirmations == 0;
+
+              if (storedTx.height != oldHeight ||
+                  storedTx.confirmations != oldConfs ||
+                  storedTx.isPending != oldPending) {
+                transactionHistory.addOne(storedTx);
+                didUpdateHistory = true;
+              }
             }
 
             historiesWithDetails[txid] = storedTx;
           } else {
-            // New transaction that we don't have in the history, will need to fetch details for it later
-            missingHistory.add(transaction);
+            missingHistoryItems.add({
+              'tx_hash': txid,
+              'height': height,
+              'script_hash': sh,
+              'address': addressRecord.address,
+            });
           }
         }
+      }
 
-        if (missingHistory.isNotEmpty) {
-          const int chunkSize = 50;
+      // Batch fetch missing tx verbose details
+      if (missingHistoryItems.isEmpty) {
+        if (didUpdateHistory) await transactionHistory.save();
+        return historiesWithDetails;
+      }
 
-          for (var i = 0; i < missingHistory.length; i += chunkSize) {
+      for (var i = 0; i < missingHistoryItems.length; i += txChunkSize) {
+        final end = (i + txChunkSize < missingHistoryItems.length)
+            ? i + txChunkSize
+            : missingHistoryItems.length;
+        final chunkHistory = missingHistoryItems.sublist(i, end);
 
-            // end index for the current chunk, ensuring we don't go out of bounds
-            final end = (i + chunkSize < missingHistory.length) ? i + chunkSize : missingHistory.length;
-            final chunkHistory = missingHistory.sublist(i, end);
-            final chunkHashes = chunkHistory.map((e) => e['tx_hash'] as String).toList();
-            final chunkParams = chunkHashes.map((hash) => [hash, true]).toList();
+        final hashes = chunkHistory
+            .map((e) => (e['tx_hash'] as String).trim())
+            .where((h) => h.isNotEmpty)
+            .toList(growable: false);
 
-            final batchResults = await electrumClient.callBatchWithTimeout(
-              method: 'blockchain.transaction.get',
-              paramsList: chunkParams,
-            );
+        final heightsByHash = <String, int?>{
+          for (final e in chunkHistory)
+            (e['tx_hash'] as String): (e['height'] as int?),
+        };
 
-            // Process the batch results and update the transaction history with the new transactions
-            final newTxs = await _processBatchResults(batchResults, chunkHistory, currentHeight);
-            print("Fetched details for ${newTxs.length} transactions for address");
-            for (final tx in newTxs) {
-              historiesWithDetails[tx.id] = tx;
+        final infosByHash = await fetchTransactionInfoBatch(
+          hashes: hashes,
+          heightsByHash: heightsByHash,
+          retryOnFailure: true,
+          retryDelay: const Duration(seconds: 2),
+          txChunkSize: txChunkSize,
+          inputTxChunkSize: inputTxChunkSize,
+        );
 
-              // Identify peg-out transactions in Litecoin
-              if (this is LitecoinWallet) {
-                for (final tx2 in transactionHistory.transactions.values) {
-                  final heightDiff = ((tx2.height ?? 0) - (tx.height ?? 0)).abs();
-                  if (tx2.additionalInfo["isPegOut"] == true &&
-                      tx2.amount == tx.amount &&
-                      heightDiff <= 5) {
-                    tx.additionalInfo["fromPegOut"] = true;
-                  }
-                }
+        for (final txid in hashes) {
+          final tx = infosByHash[txid];
+          if (tx == null) continue;
+
+          historiesWithDetails[tx.id] = tx;
+
+          // Litecoin peg-out tagging
+          if (this is LitecoinWallet) {
+            for (final tx2 in transactionHistory.transactions.values) {
+              final heightDiff = ((tx2.height ?? 0) - (tx.height ?? 0)).abs();
+              if (tx2.additionalInfo["isPegOut"] == true &&
+                  tx2.amount == tx.amount &&
+                  heightDiff <= 5) {
+                tx.additionalInfo["fromPegOut"] = true;
               }
-              transactionHistory.addOne(tx);
             }
           }
-          await transactionHistory.save();
+
+          transactionHistory.addOne(tx);
+          didUpdateHistory = true;
         }
+      }
+
+      if (didUpdateHistory) {
+        await transactionHistory.save();
       }
 
       return historiesWithDetails;
     } catch (e, stacktrace) {
+      final prefix = lastTxId.isNotEmpty ? '$lastTxId - ' : '';
       _onError?.call(FlutterErrorDetails(
-        exception: "$txid - $e",
+        exception: '$prefix$e',
         stack: stacktrace,
-        library: this.runtimeType.toString(),
+        library: runtimeType.toString(),
       ));
       return {};
     }
   }
 
 
-  Future<List<ElectrumTransactionInfo>> _processBatchResults(
-      List<dynamic> batchResults, List<Map<String, dynamic>> chunkHistory, int? currentHeight) async {
-    List<ElectrumTransactionInfo> results = [];
-    Set<String> inputTxIdsToFetch = {};
-    List<BtcTransaction> parsedOriginalTxs = [];
+  Future<Map<String, Map<String, dynamic>>> _getTransactionVerboseBatch(
+    List<String> hashes, {
+    int timeoutMs = 15000,
+  }) async {
+    final result = <String, Map<String, dynamic>>{};
+    if (hashes.isEmpty) return result;
 
-    // Parse all original transactions and collect input TXIDs
-    for (int i = 0; i < batchResults.length; i++) {
-      final res = batchResults[i];
-      if (res is! Map<String, dynamic>) {
-        parsedOriginalTxs.add(BtcTransaction(inputs: [], outputs: [])); // dummy to keep index aligned
+    final paramsList = hashes.map((h) => <Object>[h, true]).toList(growable: false);
+    final batchResults = await electrumClient.callBatchWithTimeout(
+      method: 'blockchain.transaction.get',
+      paramsList: paramsList,
+      timeout: timeoutMs,
+    );
+
+    // Electrum batch response is a list aligned with paramsList ordering.
+    for (var i = 0; i < hashes.length; i++) {
+      final txid = hashes[i];
+      final r = (i < batchResults.length) ? batchResults[i] : null;
+      if (r is Map<String, dynamic>) {
+        result[txid] = r;
+      } else {
+        result[txid] = <String, dynamic>{};
+      }
+    }
+
+    return result;
+  }
+
+  Future<Map<String, String?>> _getTransactionHexBatch(
+    List<String> hashes, {
+    int timeoutMs = 15000,
+  }) async {
+    final result = <String, String?>{};
+    if (hashes.isEmpty) return result;
+
+    // In Electrum, `blockchain.transaction.get` without verbose returns hex string.
+    final paramsList = hashes.map((h) => <Object>[h]).toList(growable: false);
+    final batchResults = await electrumClient.callBatchWithTimeout(
+      method: 'blockchain.transaction.get',
+      paramsList: paramsList,
+      timeout: timeoutMs,
+    );
+
+    for (var i = 0; i < hashes.length; i++) {
+      final txid = hashes[i];
+      final r = (i < batchResults.length) ? batchResults[i] : null;
+      if (r is String && r.isNotEmpty) {
+        result[txid] = r;
+      } else {
+        result[txid] = null;
+      }
+    }
+
+    return result;
+  }
+
+  Future<Map<int, int>> _fetchBlockTimestampsFromMempoolByHeights(
+    Set<int> heights,
+  ) async {
+    final out = <int, int>{};
+    if (heights.isEmpty) return out;
+    if (!(await checkIfMempoolAPIIsEnabled())) return out;
+
+    // Best-effort: if any call fails, we just skip that height.
+    await Future.wait(heights.map((h) async {
+      try {
+        final blockHashResp = await ProxyWrapper()
+            .get(
+              clearnetUri: Uri.parse(
+                'https://mempool.cakewallet.com/api/v1/block-height/$h',
+              ),
+            )
+            .timeout(const Duration(seconds: 15));
+
+        if (blockHashResp.statusCode != 200 || blockHashResp.body.isEmpty) return;
+
+        final blockHash = blockHashResp.body.trim();
+        if (blockHash.isEmpty) return;
+
+        final blockResp = await ProxyWrapper()
+            .get(
+              clearnetUri: Uri.parse(
+                'https://mempool.cakewallet.com/api/v1/block/$blockHash',
+              ),
+            )
+            .timeout(const Duration(seconds: 15));
+
+        if (blockResp.statusCode != 200 || blockResp.body.isEmpty) return;
+
+        final decoded = jsonDecode(blockResp.body);
+        final ts = decoded is Map<String, dynamic> ? decoded['timestamp'] : null;
+        if (ts == null) return;
+
+        final parsed = int.tryParse(ts.toString());
+        if (parsed == null) return;
+
+        out[h] = parsed;
+      } catch (_) {
+        // ignore
+      }
+    }));
+
+    return out;
+  }
+
+  /// Batch version of [getTransactionExpanded].
+  ///
+  /// Returns bundles keyed by txid.
+  Future<Map<String, ElectrumTransactionBundle>> getTransactionExpandedBatch({
+    required List<String> hashes,
+    Map<String, int?>? heightsByHash,
+    int txChunkSize = 50,
+    int inputTxChunkSize = 50,
+  }) async {
+    final bundles = <String, ElectrumTransactionBundle>{};
+    if (hashes.isEmpty) return bundles;
+
+    // Stable unique list.
+    final unique = <String>[];
+    final seen = <String>{};
+    for (final h in hashes) {
+      final hh = h.trim();
+      if (hh.isEmpty) continue;
+      if (seen.add(hh)) unique.add(hh);
+    }
+    if (unique.isEmpty) return bundles;
+
+    // Tip is needed only for confirmations when verbose does not include it.
+    final tip = await getUpdatedChainTip();
+    final tipVal = tip ?? 0;
+
+    // 1) Fetch originals (verbose if possible)
+    final verboseByHash = <String, Map<String, dynamic>>{};
+    for (var i = 0; i < unique.length; i += txChunkSize) {
+      final end = (i + txChunkSize < unique.length) ? i + txChunkSize : unique.length;
+      final chunk = unique.sublist(i, end);
+      verboseByHash.addAll(await _getTransactionVerboseBatch(chunk));
+    }
+
+    // 2) For missing verbose, fetch hex
+    final needHex = <String>[];
+    for (final txid in unique) {
+      final v = verboseByHash[txid];
+      if (v == null || v.isEmpty || v['hex'] == null) {
+        needHex.add(txid);
+      }
+    }
+
+    final hexByHash = <String, String?>{};
+    for (var i = 0; i < needHex.length; i += txChunkSize) {
+      final end = (i + txChunkSize < needHex.length) ? i + txChunkSize : needHex.length;
+      final chunk = needHex.sublist(i, end);
+      hexByHash.addAll(await _getTransactionHexBatch(chunk));
+    }
+
+    // 3) Build originals + collect all input txids needed
+    final originalByHash = <String, BtcTransaction>{};
+    final inputTxidsByHash = <String, List<String>>{};
+    final allInputTxids = <String>{};
+
+    for (final txid in unique) {
+      final verbose = verboseByHash[txid] ?? const <String, dynamic>{};
+      final String? txHex = (verbose['hex'] as String?) ?? hexByHash[txid];
+      if (txHex == null || txHex.isEmpty) {
+        continue; // cannot build
+      }
+
+      final original = BtcTransaction.fromRaw(txHex);
+      originalByHash[txid] = original;
+
+      final inputTxids = <String>[];
+      for (final vin in original.inputs) {
+        inputTxids.add(vin.txId);
+        allInputTxids.add(vin.txId);
+      }
+      inputTxidsByHash[txid] = inputTxids;
+    }
+
+    // 4) Batch fetch input transactions (prefer verbose -> fallback to hex)
+    final inputVerboseByTxid = <String, Map<String, dynamic>>{};
+    final allInputsList = allInputTxids.toList(growable: false);
+    for (var i = 0; i < allInputsList.length; i += inputTxChunkSize) {
+      final end = (i + inputTxChunkSize < allInputsList.length)
+          ? i + inputTxChunkSize
+          : allInputsList.length;
+      final chunk = allInputsList.sublist(i, end);
+      inputVerboseByTxid.addAll(await _getTransactionVerboseBatch(chunk));
+    }
+
+    final needInputHex = <String>[];
+    for (final txid in allInputsList) {
+      final v = inputVerboseByTxid[txid];
+      if (v == null || v.isEmpty || v['hex'] == null) {
+        needInputHex.add(txid);
+      }
+    }
+
+    final inputHexByTxid = <String, String?>{};
+    for (var i = 0; i < needInputHex.length; i += inputTxChunkSize) {
+      final end = (i + inputTxChunkSize < needInputHex.length)
+          ? i + inputTxChunkSize
+          : needInputHex.length;
+      final chunk = needInputHex.sublist(i, end);
+      inputHexByTxid.addAll(await _getTransactionHexBatch(chunk));
+    }
+
+    final parsedInputTxById = <String, BtcTransaction>{};
+    for (final txid in allInputsList) {
+      final v = inputVerboseByTxid[txid] ?? const <String, dynamic>{};
+      final String? hex = (v['hex'] as String?) ?? inputHexByTxid[txid];
+      if (hex == null || hex.isEmpty) continue;
+      try {
+        bool isValidHex(String s) =>
+            s.isNotEmpty &&
+                s.length.isEven &&
+                RegExp(r'^[0-9a-fA-F]+$').hasMatch(s);
+
+        if (!isValidHex(hex)) {
+          throw FormatException('Invalid tx hex for $txid len=${hex.length}');
+        }
+
+        parsedInputTxById[txid] = BtcTransaction.fromRaw(hex);
+      } catch (e) {
+        // optional: log once in debug to see bad cases
+        // printV('Failed to parse input tx $txid: $e');
+      }
+    }
+
+    // 5) Optional mempool timestamp lookup for heights where time is missing.
+    final heightsNeedingTime = <int>{};
+    for (final txid in originalByHash.keys) {
+      final verbose = verboseByHash[txid] ?? const <String, dynamic>{};
+      final time = verbose['time'] as int?;
+      final h = heightsByHash?[txid];
+      if (time == null && h != null && h > 0) {
+        heightsNeedingTime.add(h);
+      }
+    }
+
+    final mempoolTimes = await _fetchBlockTimestampsFromMempoolByHeights(heightsNeedingTime);
+
+    // 6) Build bundles
+    for (final txid in originalByHash.keys) {
+      final original = originalByHash[txid]!;
+      final verbose = verboseByHash[txid] ?? const <String, dynamic>{};
+
+      int? time = verbose['time'] as int?;
+      int? confirmations = verbose['confirmations'] as int?;
+
+      final h = heightsByHash?[txid];
+      if (h != null) {
+        if (time == null && h > 0) {
+          // Prefer mempool timestamp if available, else fallback to height-based estimate.
+          final mp = mempoolTimes[h];
+          if (mp != null) {
+            time = mp;
+          } else {
+            time = (getDateByBitcoinHeight(h).millisecondsSinceEpoch / 1000).round();
+          }
+        }
+
+        if (confirmations == null) {
+          if (tipVal > 0 && h > 0) {
+            confirmations = tipVal - h + 1;
+          }
+        }
+      }
+
+      final ins = <BtcTransaction>[];
+      final inputTxids = inputTxidsByHash[txid] ?? const <String>[];
+
+      bool allInputsPresent = true;
+      for (final inTxid in inputTxids) {
+        final inTx = parsedInputTxById[inTxid];
+        if (inTx == null) {
+          allInputsPresent = false;
+          break;
+        }
+        ins.add(inTx);
+      }
+
+      // MVP safety: only emit a bundle when we can match inputs 1:1 with the original tx.
+      if (!allInputsPresent || ins.length != original.inputs.length) {
         continue;
       }
 
-      try {
-        final hexData = res['hex'] as String;
-        final original = BtcTransaction.fromRaw(hexData);
-        parsedOriginalTxs.add(original);
-
-        for (final vin in original.inputs) {
-          // Ignore coinbase transactions (they have no sender address to fetch)
-          if (vin.txId != "0000000000000000000000000000000000000000000000000000000000000000") {
-            inputTxIdsToFetch.add(vin.txId);
-          }
-        }
-      } catch (e) {
-        printV("Error parsing original tx hex: $e");
-        parsedOriginalTxs.add(BtcTransaction(inputs: [], outputs: []));
-      }
-    }
-
-    // Batch fetch ALL input transactions (Needed to identify sender address)
-    Map<String, String> inputHexes = {};
-    if (inputTxIdsToFetch.isNotEmpty) {
-      final inputTxIdsList = inputTxIdsToFetch.toList();
-
-      for (int i = 0; i < inputTxIdsList.length; i += 50) {
-        final end = (i + 50 < inputTxIdsList.length) ? i + 50 : inputTxIdsList.length;
-        final chunk = inputTxIdsList.sublist(i, end);
-
-        // Fetch the input transactions in batch
-        final paramsList = chunk.map((hash) => [hash, false]).toList();
-        final inBatchResults = await electrumClient.callBatchWithTimeout(
-          method: 'blockchain.transaction.get',
-          paramsList: paramsList,
-        );
-
-        for (int j = 0; j < inBatchResults.length; j++) {
-          final inRes = inBatchResults[j];
-          if (inRes is String) {
-            inputHexes[chunk[j]] = inRes;
-          } else if (inRes is Map<String, dynamic>) {
-            inputHexes[chunk[j]] = inRes['hex'] as String;
-          }
-        }
-      }
-    }
-
-    // Now process each original transaction with its inputs to build the ElectrumTransactionInfo
-    for (int i = 0; i < batchResults.length; i++) {
-      final res = batchResults[i];
-      if (res is! Map<String, dynamic>) continue;
-
-      final original = parsedOriginalTxs[i];
-      if (original.inputs.isEmpty && original.outputs.isEmpty) continue; // Skip dummies
-
-      final ins = <BtcTransaction>[];
-      for (final vin in original.inputs) {
-        final inHex = inputHexes[vin.txId];
-        if (inHex != null) {
-          try {
-            ins.add(BtcTransaction.fromRaw(inHex));
-          } catch (_) {
-            ins.add(BtcTransaction(inputs: [], outputs: []));
-          }
-        } else {
-          ins.add(BtcTransaction(inputs: [], outputs: []));
-        }
-      }
-
-      final txid = chunkHistory[i]['tx_hash'] as String;
-      final height = chunkHistory[i]['height'] as int;
-      int? time = res['time'] as int?;
-      int confirmations = res['confirmations'] as int? ?? 0;
-
-      if (confirmations == 0 && currentHeight != null && currentHeight > 0 && height > 0) {
-        confirmations = currentHeight - height + 1;
-      }
-
-      // Mempool API fallback for unconfirmed times
-      if (time == null && height > 0 && await checkIfMempoolAPIIsEnabled()) {
-        try {
-          final blockHash = await ProxyWrapper()
-              .get(clearnetUri: Uri.parse("https://mempool.cakewallet.com/api/v1/block-height/$height"))
-              .timeout(Duration(seconds: 5));
-
-          if (blockHash.statusCode == 200 && blockHash.body.isNotEmpty) {
-            final blockResponse = await ProxyWrapper()
-                .get(clearnetUri: Uri.parse("https://mempool.cakewallet.com/api/v1/block/${blockHash.body}"))
-                .timeout(Duration(seconds: 5));
-            if (blockResponse.statusCode == 200) {
-              time = int.parse(jsonDecode(blockResponse.body)['timestamp'].toString());
-            }
-          }
-        } catch (_) {}
-      }
-
-      final bundle = ElectrumTransactionBundle(
+      bundles[txid] = ElectrumTransactionBundle(
         original,
         ins: ins,
-        time: time ?? (height > 0 ? (getDateByBitcoinHeight(height).millisecondsSinceEpoch ~/ 1000) : null),
-        confirmations: confirmations,
+        time: time,
+        confirmations: confirmations ?? 0,
+      );
+    }
+
+    return bundles;
+  }
+
+  Future<Map<String, ElectrumTransactionInfo?>> fetchTransactionInfoBatch({
+    required List<String> hashes,
+    Map<String, int?>? heightsByHash,
+    bool retryOnFailure = false,
+    Duration retryDelay = const Duration(seconds: 2),
+    int txChunkSize = 50,
+    int inputTxChunkSize = 50,
+  }) async {
+    final out = <String, ElectrumTransactionInfo?>{};
+    if (hashes.isEmpty) return out;
+
+    // Stable unique list
+    final unique = <String>[];
+    final seen = <String>{};
+    for (final h in hashes) {
+      final hh = h.trim();
+      if (hh.isEmpty) continue;
+      if (seen.add(hh)) unique.add(hh);
+    }
+    if (unique.isEmpty) return out;
+
+    Future<void> _run(List<String> batch) async {
+      final bundlesByHash = await getTransactionExpandedBatch(
+        hashes: batch,
+        heightsByHash: heightsByHash,
+        txChunkSize: txChunkSize,
+        inputTxChunkSize: inputTxChunkSize,
       );
 
-      try {
-        final info = ElectrumTransactionInfo.fromElectrumBundle(
-          bundle,
-          walletInfo.type,
-          network,
-          addresses: addressesSet,
-          height: height,
-        );
-        info.id = txid;
-        results.add(info);
-      } catch (e) {
-        printV("Failed to build ElectrumTransactionInfo for $txid: $e");
+      for (final txid in batch) {
+        final bundle = bundlesByHash[txid];
+        if (bundle == null) {
+          out[txid] = null;
+          continue;
+        }
+
+        try {
+          final info = ElectrumTransactionInfo.fromElectrumBundle(
+            bundle,
+            walletInfo.type,
+            network,
+            addresses: addressesSet,
+            height: heightsByHash?[txid],
+          );
+          info.id = txid;
+          out[txid] = info;
+        } catch (_) {
+          out[txid] = null;
+        }
       }
     }
 
-    return results;
+    // First pass in chunks to limit memory/latency
+    for (var i = 0; i < unique.length; i += txChunkSize) {
+      final end = (i + txChunkSize < unique.length) ? i + txChunkSize : unique.length;
+      final chunk = unique.sublist(i, end);
+      await _run(chunk);
+    }
+
+    if (retryOnFailure) {
+      final toRetry = <String>[];
+      for (final h in unique) {
+        if (out[h] == null) toRetry.add(h);
+      }
+
+      if (toRetry.isNotEmpty) {
+        await Future.delayed(retryDelay);
+        for (var i = 0; i < toRetry.length; i += txChunkSize) {
+          final end = (i + txChunkSize < toRetry.length) ? i + txChunkSize : toRetry.length;
+          final chunk = toRetry.sublist(i, end);
+          await _run(chunk);
+        }
+      }
+    }
+
+    return out;
   }
+
 
   Future<void> updateTransactions() async {
     printV("updateTransactions() called!");
@@ -2664,7 +2992,18 @@ abstract class ElectrumWalletBase
       }
 
       _isTransactionUpdating = true;
+
+      final start = DateTime.now();
+      printV("fetchTransactions START: $start");
+
       await fetchTransactions();
+
+      final end = DateTime.now();
+      final duration = end.difference(start);
+
+      printV("fetchTransactions END: $end");
+      printV("fetchTransactions took: ${duration.inMilliseconds} ms");
+
       walletAddresses.updateReceiveAddresses();
       _isTransactionUpdating = false;
     } catch (e, stacktrace) {
@@ -2701,11 +3040,7 @@ abstract class ElectrumWalletBase
 
           await updateBalance();
 
-          if (this is BitcoinWallet) {
-          await _fetchBatchAddressHistory(address, await getCurrentChainTip());
-          } else {
-            await _fetchAddressHistory(address, await getCurrentChainTip());
-          }
+          await _fetchBatchAddressHistory([address], await getCurrentChainTip());
         } catch (e, s) {
           printV("sub error: $e");
           _onError?.call(FlutterErrorDetails(

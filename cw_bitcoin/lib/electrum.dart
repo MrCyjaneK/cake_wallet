@@ -240,6 +240,47 @@ class ElectrumClient {
         return [];
       });
 
+  Future<Map<String, List<Map<String, dynamic>>>> getBatchHistory(
+      List<String> scriptHashes,
+      ) async {
+    final paramsList = scriptHashes.map((h) => <Object>[h]).toList();
+
+    final batchResults = await callBatchWithTimeout(
+      method: 'blockchain.scripthash.get_history',
+      paramsList: paramsList,
+      timeout: 15000,
+    );
+
+    final historyMap = <String, List<Map<String, dynamic>>>{};
+
+    for (int i = 0; i < scriptHashes.length; i++) {
+      final sh = scriptHashes[i];
+
+      // protect against partial batch response
+      if (i >= batchResults.length) {
+        historyMap[sh] = const [];
+        continue;
+      }
+
+      final result = batchResults[i];
+
+      if (result is List) {
+        historyMap[sh] = result
+            .whereType<Map>() // keep only maps
+            .map((m) => m.map((k, v) => MapEntry(k.toString(), v)))
+            .cast<Map<String, dynamic>>()
+            .toList();
+      } else {
+        // could be Map error or null
+        historyMap[sh] = const [];
+        // optional: log errors
+        // if (result is Map && result['message'] != null) printV("[batch][history] $sh -> ${result['message']}");
+      }
+    }
+
+    return historyMap;
+  }
+
   Future<List<Map<String, dynamic>>?> getListUnspent(String scriptHash) async {
     final result = await call(method: 'blockchain.scripthash.listunspent', params: [scriptHash]);
 
