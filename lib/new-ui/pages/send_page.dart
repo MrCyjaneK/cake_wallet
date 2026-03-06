@@ -309,7 +309,7 @@ class _NewSendPageState extends State<NewSendPage> {
                                   if (outputIndex == 0) _setOutput(0);
                                 }),
                           if (widget.mode == SendPageModes.normal &&
-                              widget.sendViewModel.sendTemplateViewModel.hasMultiRecipient)
+                              widget.sendViewModel.hasMultiRecipient)
                             ModernButton(
                                 size: 36,
                                 icon: Icon(Icons.add),
@@ -469,7 +469,7 @@ class _NewSendPageState extends State<NewSendPage> {
                                       ),
                                     ],
                                   ),
-                                  if (widget.sendViewModel.isMwebAvailable)
+                                  if (widget.sendViewModel.isMwebAvailable && widget.mode == SendPageModes.normal)
                                     StandardCheckbox(
                                       caption: S.of(context).litecoin_mweb_allow_coins,
                                       captionColor: Theme.of(context).colorScheme.onSurface,
@@ -497,7 +497,7 @@ class _NewSendPageState extends State<NewSendPage> {
                                             keyValue: "",
                                             label: S.of(context).fees,
                                             subtitle:
-                                                "~${output.estimatedFee} ${widget.sendViewModel.currency} (${output.estimatedFeeFiatAmount} ${widget.sendViewModel.fiatCurrency})",
+                                                "~${output.estimatedFee} ${widget.sendViewModel.currencySymbol} (${output.estimatedFeeFiatAmount} ${widget.sendViewModel.fiatCurrency})",
                                             onTap: () {
                                               if (widget
                                                   .sendViewModel.feesViewModel.hasFeesPriority)
@@ -771,6 +771,7 @@ class _NewSendPageState extends State<NewSendPage> {
   void _removeInputControllers(int index) {
     _amountControllers.removeAt(index);
     _addressControllers.removeAt(index);
+    _memoControllers.removeAt(index);
   }
 
   void _presentCurrencyPicker(BuildContext context) {
@@ -1158,9 +1159,13 @@ class _NewSendPageState extends State<NewSendPage> {
     }
     _addressControllers[_selectedOutput].text = paymentRequest.address;
     if (paymentRequest.amount.isNotEmpty) {
-      _amountControllers[_selectedOutput].text = widget.sendViewModel.amountParsingProxy
-          .getDisplayCryptoAmount(
-              paymentRequest.amount, widget.sendViewModel.selectedCryptoCurrency);
+      try{
+        _amountControllers[_selectedOutput].text = widget.sendViewModel.amountParsingProxy
+            .getDisplayCryptoAmount(
+            paymentRequest.amount, widget.sendViewModel.selectedCryptoCurrency);
+      } catch(e) {
+
+      }
     }
     _memoControllers[_selectedOutput].text = paymentRequest.note;
   }
