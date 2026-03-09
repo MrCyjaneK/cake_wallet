@@ -266,15 +266,12 @@ class ElectrumClient {
 
       if (result is List) {
         historyMap[sh] = result
-            .whereType<Map>() // keep only maps
+            .whereType<Map<dynamic, dynamic>>()
             .map((m) => m.map((k, v) => MapEntry(k.toString(), v)))
             .cast<Map<String, dynamic>>()
             .toList();
       } else {
-        // could be Map error or null
         historyMap[sh] = const [];
-        // optional: log errors
-        // if (result is Map && result['message'] != null) printV("[batch][history] $sh -> ${result['message']}");
       }
     }
 
