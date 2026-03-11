@@ -117,9 +117,10 @@ abstract class ElectrumWalletBase
     sharedPrefs.complete(SharedPreferences.getInstance());
   }
 
-  static const int addressHistoryChunkSize = 250;
-  static const int transactionChunkSize = 250;
-  static const int discoveryHistoryChunkSize = 1;
+  static const int addressHistoryChunkSize = 200;
+  static const int transactionChunkSize = 200;
+  static const int inputTransactionChunkSize = 200;
+  static const int discoveryHistoryChunkSize = 20;
 
   static const int transactionBatchTimeoutMs = 20000;
 
@@ -2375,39 +2376,39 @@ abstract class ElectrumWalletBase
 
     final tip = await getCurrentChainTip();
 
-    // Get history in chunks
-    for (var i = 0; i < addressesByType.length; i += addressHistoryChunkSize) {
-      final end = (i + addressHistoryChunkSize < addressesByType.length)
-          ? i + addressHistoryChunkSize
-          : addressesByType.length;
+    final addressHistory = await _processChunksToMap<BitcoinAddressRecord, String, ElectrumTransactionInfo>(
+      items: addressesByType,
+      chunkSize: addressHistoryChunkSize,
+      processChunk: (chunk) => _fetchBatchAddressHistory(chunk, tip, addressHistoryChunkSize),
+    );
 
-      final addressChunk = addressesByType.sublist(i, end);
+    if (addressHistory.isNotEmpty) historiesWithDetails.addAll(addressHistory);
 
-      final chunkHistory = await _fetchBatchAddressHistory(addressChunk, tip, addressHistoryChunkSize);
-      if (chunkHistory.isNotEmpty) historiesWithDetails.addAll(chunkHistory);
-
-      for (final addressRecord in addressChunk) {
+      for (final addressRecord in addressesByType) {
         final matchedAddresses = addressRecord.isHidden ? hiddenAddresses : receiveAddresses;
 
-        // Check if the address is within the gap limit and has been used (has history)
-        final isUsedAddressUnderGap = matchedAddresses.indexOf(addressRecord) >=
-            matchedAddresses.length -
-                (addressRecord.isHidden
-                    ? ElectrumWalletAddressesBase.defaultChangeAddressesCount
-                    : ElectrumWalletAddressesBase.defaultReceiveAddressesCount);
+        final isUsedAddressUnderGap =
+            matchedAddresses.indexOf(addressRecord) >=
+                matchedAddresses.length - ElectrumWalletAddressesBase.gap;
 
-        // If the address is used and within the gap limit, trigger discovery of new addresses
         if (isUsedAddressUnderGap && addressRecord.isUsed) {
           final prevLength = walletAddresses.allAddresses.length;
 
-          //Can be implemented more efficiently by batching the discoverAddresses calls as well.
-          await walletAddresses.discoverAddresses(
+
+          await walletAddresses.discoverAddressesBatch(
             matchedAddresses,
             addressRecord.isHidden,
-            (address) async {
-              await subscribeForUpdates();
-              return _fetchBatchAddressHistory([address], tip, discoveryHistoryChunkSize)
-                  .then((h) => h.isNotEmpty ? address.address : null);
+                (newAddresses) async {
+              await _fetchBatchAddressHistory(
+                newAddresses,
+                tip,
+                discoveryHistoryChunkSize,
+              );
+
+              return newAddresses
+                  .where((addressRecord) => addressRecord.isUsed)
+                  .map((addressRecord) => addressRecord.address)
+                  .toSet();
             },
             type: type,
           );
@@ -2415,13 +2416,12 @@ abstract class ElectrumWalletBase
           final newLength = walletAddresses.allAddresses.length;
 
           if (newLength > prevLength) {
-            await fetchTransactionsForAddressType(
+            await fetchTransactionsForAddressTypeBatch(
               historiesWithDetails,
               type);
             return;
           }
         }
-      }
     }
   }
 
@@ -2523,7 +2523,7 @@ abstract class ElectrumWalletBase
       await _processChunksToMap<String, String, List<Map<String, dynamic>>>(
         items: scriptHashes,
         chunkSize: historyChunkSize,
-        processChunk: electrumClient.getBatchHistory,
+        processChunk: electrumClient.getBatchHistory
       );
 
       // Map scriptHash -> addressRecord
@@ -2629,8 +2629,6 @@ abstract class ElectrumWalletBase
           heightsByHash: heightsByHash,
           retryOnFailure: true,
           retryDelay: const Duration(seconds: 1),
-          txChunkSize: historyChunkSize,
-          inputTxChunkSize: historyChunkSize,
         );
 
         for (final txid in hashes) {
@@ -2730,12 +2728,10 @@ abstract class ElectrumWalletBase
     Map<String, int?>? heightsByHash,
     bool retryOnFailure = false,
     Duration retryDelay = const Duration(seconds: 2),
-    int txChunkSize = 250,
-    int inputTxChunkSize = 250,
   }) async {
     final result = <String, ElectrumTransactionInfo?>{};
     final uniqueHashes =
-    hashes.map((h) => h.trim()).where((h) => h.isNotEmpty).toSet().toList();
+        hashes.map((h) => h.trim()).where((h) => h.isNotEmpty).toSet().toList();
 
     if (uniqueHashes.isEmpty) return result;
 
@@ -2743,8 +2739,6 @@ abstract class ElectrumWalletBase
       txIds: uniqueHashes,
       result: result,
       heightsByHash: heightsByHash,
-      txChunkSize: txChunkSize,
-      inputTxChunkSize: inputTxChunkSize,
     );
 
     if (retryOnFailure) {
@@ -2757,8 +2751,6 @@ abstract class ElectrumWalletBase
           txIds: failedHashes,
           result: result,
           heightsByHash: heightsByHash,
-          txChunkSize: txChunkSize,
-          inputTxChunkSize: inputTxChunkSize,
         );
       }
     }
@@ -2770,16 +2762,17 @@ abstract class ElectrumWalletBase
     required List<String> txIds,
     required Map<String, ElectrumTransactionInfo?> result,
     required Map<String, int?>? heightsByHash,
-    required int txChunkSize,
-    required int inputTxChunkSize,
   }) async {
-    for (var i = 0; i < txIds.length; i += txChunkSize) {
-      final end = (i + txChunkSize < txIds.length) ? i + txChunkSize : txIds.length;
+    for (var i = 0; i < txIds.length; i += transactionChunkSize) {
+      final end = (i + transactionChunkSize < txIds.length)
+          ? i + transactionChunkSize
+          : txIds.length;
       final chunk = txIds.sublist(i, end);
 
       final bundlesByHash = await getTransactionExpandedBatch(
         hashes: chunk,
-        heightsByHash: heightsByHash);
+        heightsByHash: heightsByHash,
+      );
 
       for (final txId in chunk) {
         try {
@@ -2918,9 +2911,43 @@ abstract class ElectrumWalletBase
       allInputTxids.addAll(txids);
     }
 
-    return _fetchTransactionVerboseBatch(
-      allInputTxids.toList(growable: false)
+    final inputTxIds = allInputTxids.toList(growable: false);
+
+    final verboseTransactionByHash =
+        await _processChunksToMap<String, String, Map<String, dynamic>>(
+      items: inputTxIds,
+      chunkSize: inputTransactionChunkSize,
+      processChunk: _getTransactionVerboseBatch,
     );
+
+    final emptyHex = <String>[];
+    for (final txId in inputTxIds) {
+      final vTx = verboseTransactionByHash[txId];
+      if (vTx == null || vTx.isEmpty || vTx['hex'] == null) {
+        emptyHex.add(txId);
+      }
+    }
+
+    final hexByHash = await _processChunksToMap<String, String, String?>(
+      items: emptyHex,
+      chunkSize: inputTransactionChunkSize,
+      processChunk: _getTransactionHexBatch,
+    );
+
+    for (final txId in inputTxIds) {
+      final verbose = verboseTransactionByHash[txId] ?? <String, dynamic>{};
+      if ((verbose['hex'] as String?) == null) {
+        final hex = hexByHash[txId];
+        if (hex != null && hex.isNotEmpty) {
+          verboseTransactionByHash[txId] = {
+            ...verbose,
+            'hex': hex,
+          };
+        }
+      }
+    }
+
+    return verboseTransactionByHash;
   }
 
 
@@ -3096,8 +3123,6 @@ abstract class ElectrumWalletBase
       _isTransactionUpdating = true;
 
       await fetchTransactions();
-
-
 
       walletAddresses.updateReceiveAddresses();
       _isTransactionUpdating = false;
